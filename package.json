@@ -1,6 +1,6 @@
 {
-  "name": "comment-moderator",
-  "version": "0.1.0",
+  "name": "comment-pulse",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,6 +10,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
     "iron-session": "^8.0.4",
+    "lucide-react": "^0.468.0",
     "next": "^15.5.26",
     "react": "^19.1.2",
     "react-dom": "^19.1.2"
