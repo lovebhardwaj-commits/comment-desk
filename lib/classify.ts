@@ -9,6 +9,7 @@ export type Result = {
   negative_type: "complaint" | "criticism" | "spam" | "abuse" | null;
   needs_review: boolean;
   reason: string;
+  label?: string;
 };
 export type Input = { id: string; comment: string; parent_comment?: string; post_caption?: string };
 
@@ -60,7 +61,8 @@ export const ENGINE = process.env.CLASSIFIER === "claude" && process.env.ANTHROP
 export async function classify(items: Input[]): Promise<Record<string, Result>> {
   const results: Record<string, Result> = {};
   if (ENGINE === "local") {
-    for (const it of items) results[it.id] = classifyLocal(it.comment);
+    const local = await classifyLocal(items.map((i) => i.comment));
+    items.forEach((it, i) => (results[it.id] = local[i]));
     return results;
   }
   const cached = await cacheGet(items.map((i) => key(i.id)));

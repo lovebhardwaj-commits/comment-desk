@@ -1,4 +1,5 @@
 import examples from "./examples.json";
+import extra from "./examples-extra.json";
 import { PRODUCTS, COL, CITY, ATTR, DAYS, TEMPLATES, SPAM } from "./templates";
 
 type Row = { text: string; label: string };
@@ -29,7 +30,7 @@ export function buildTrainingData(): Row[] {
     const v = [r.text.toLowerCase(), r.text.replace(/\?/g, ""), r.text + " " + pick(["🙏", "😊", "!!", "plz", "pls", ""]), r.text.replace(/the /g, "")];
     out.push({ text: pick(v), label: r.label });
   }
-  for (const [text, label] of examples as [string, string][]) out.push({ text, label });
+  for (const [text, label] of [...examples, ...extra] as [string, string][]) out.push({ text, label });
   const seen = new Map<string, Row>();
   for (const r of out) if (!seen.has(r.text)) seen.set(r.text, r);
   return [...seen.values()];
