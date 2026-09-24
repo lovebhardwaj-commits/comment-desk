@@ -10,7 +10,18 @@ type Comment = {
   id: string; text: string; time: string; author: string; hidden: boolean; canHide: boolean;
   parentId: string | null; parentText: string | null; isBrand: boolean;
 };
-type Result = { category: "Enquiry" | "Positive" | "Negative" | "Unclassified"; negative_type: string | null; needs_review: boolean; reason: string };
+type Result = { category: "Enquiry" | "Positive" | "Negative" | "Unclassified"; negative_type: string | null; needs_review: boolean; reason: string; label?: string };
+
+// What a person can pick when correcting a comment. Values are the built-in model's labels.
+const CHOICES: [string, string][] = [
+  ["Enquiry", "Enquiry"],
+  ["Positive", "Positive"],
+  ["Complaint", "Negative · complaint"],
+  ["Negative", "Negative · criticism"],
+  ["Spam", "Negative · spam"],
+];
+const labelOf = (r?: Result) =>
+  !r ? "" : r.label || (r.category === "Negative" ? (r.negative_type === "complaint" ? "Complaint" : r.negative_type === "spam" ? "Spam" : "Negative") : r.category);
 type Filter = "All" | "Enquiry" | "Positive" | "Negative" | "Review";
 
 const CHUNK = 100;
@@ -23,6 +34,26 @@ export default function CommentsPanel({ target }: { target: Target }) {
   const [showBrand, setShowBrand] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [notSaved, setNotSaved] = useState(false);
+
+  async function correct(c: Comment, label: string) {
+    setSaving((s) => ({ ...s, [c.id]: true }));
+    try {
+      const d = await api<{ result: Result; persistent: boolean }>("/api/label", { method: "POST", body: JSON.stringify({ text: c.text, label }) });
+      // Apply to this comment and any identical comments on the post.
+      setResults((r) => {
+        const next = { ...r };
+        for (const x of comments || []) if (x.text.trim().toLowerCase() === c.text.trim().toLowerCase()) next[x.id] = d.result;
+        return next;
+      });
+      if (!d.persistent) setNotSaved(true);
+    } catch (e: any) {
+      setError(`Couldn't save the correction: ${e.message}`);
+    } finally {
+      setSaving((s) => ({ ...s, [c.id]: false }));
+    }
+  }
 
   async function categorise(list: Comment[]) {
     const todo = list.filter((c) => !c.isBrand && c.text.trim());
@@ -113,6 +144,9 @@ export default function CommentsPanel({ target }: { target: Target }) {
       </div>
 
       {error && <div className="banner err" role="alert">{error}</div>}
+      {notSaved && (
+        <div className="banner">Corrections are working, but they&apos;re only kept until the server restarts. Add an Upstash Redis database in Vercel to keep them permanently (see README).</div>
+      )}
       {!comments && !error && <div className="empty">Loading comments…</div>}
       {comments?.length === 0 && <div className="empty">No comments on this post yet.</div>}
 
@@ -135,6 +169,11 @@ export default function CommentsPanel({ target }: { target: Target }) {
                   {r?.negative_type && <span className="subtype">{r.negative_type}</span>}
                   {r?.needs_review && <span className="badge review">Needs review</span>}
                   <span className="reason">{r?.reason}</span>
+                  {r && r.category !== "Unclassified" && (
+                    <select className="fix" aria-label="Change category" value={labelOf(r)} disabled={!!saving[c.id]} onChange={(e) => correct(c, e.target.value)}>
+                      {CHOICES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                    </select>
+                  )}
                   {c.canHide ? (
                     <button className={`btn small${c.hidden ? "" : " danger"}`} disabled={!!pending[c.id]} onClick={() => toggleHide(c)}>
                       {pending[c.id] ? "…" : c.hidden ? "Unhide" : "Hide"}

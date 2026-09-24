@@ -34,13 +34,15 @@ export default function Dashboard({ userName }: { userName: string }) {
   const [ads, setAds] = useState<Ad[] | null>(null);
   const [adsNext, setAdsNext] = useState<string | null>(null);
 
+  const [missingPermissions, setMissingPermissions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api<{ pages: PageAcc[] }>("/api/accounts")
+    api<{ pages: PageAcc[]; missingPermissions: string[] }>("/api/accounts")
       .then((d) => {
         setPages(d.pages);
+        setMissingPermissions(d.missingPermissions || []);
         if (d.pages[0]) {
           setPageId(d.pages[0].id);
           if (!d.pages[0].instagram) setPlatform("facebook");
@@ -125,6 +127,8 @@ export default function Dashboard({ userName }: { userName: string }) {
         <div className="user">{userName}<button className="btn small" onClick={logout}>Log out</button></div>
       </header>
 
+      <AccessBanner pages={pages} missingPermissions={missingPermissions} />
+
       <div className="body">
         <aside className="side">
           {tab === "posts" ? (
@@ -148,6 +152,12 @@ export default function Dashboard({ userName }: { userName: string }) {
                   <button aria-pressed={platform === "instagram"} disabled={!page?.instagram} onClick={() => { setPlatform("instagram"); setPosts(null); }}>Instagram</button>
                   <button aria-pressed={platform === "facebook"} onClick={() => { setPlatform("facebook"); setPosts(null); }}>Facebook</button>
                 </div>
+                {page && !page.instagram && (
+                  <p className="hint">
+                    No Instagram account is available for this Page. Either the Page has no Instagram professional account linked, or you didn&apos;t tick it when logging in.{" "}
+                    <a href="/api/auth/login?reconnect=1">Reconnect</a>
+                  </p>
+                )}
                 <div className="row">
                   <div className="field"><label htmlFor="since">From</label><input id="since" type="date" value={since} max={until} onChange={(e) => setSince(e.target.value)} /></div>
                   <div className="field"><label htmlFor="until">To</label><input id="until" type="date" value={until} min={since} onChange={(e) => setUntil(e.target.value)} /></div>
@@ -156,7 +166,14 @@ export default function Dashboard({ userName }: { userName: string }) {
               </div>
               <div className="list">
                 {error && <div className="banner err">{error}</div>}
-                {!posts && !error && <div className="empty">Choose a Page and date range, then Show posts.</div>}
+                {pages?.length === 0 && (
+                  <div className="empty">
+                    <strong>No Facebook Pages are connected.</strong>
+                    <p>Log in again and tick the merchant&apos;s Page, its Instagram account and your business in the Facebook pop-up.</p>
+                    <a className="btn primary" href="/api/auth/login?reconnect=1">Reconnect Facebook</a>
+                  </div>
+                )}
+                {!posts && !error && !!pages?.length && <div className="empty">Choose a Page and date range, then Show posts.</div>}
                 {posts?.length === 0 && <div className="empty">No posts in this date range.</div>}
                 {posts?.map((p) => (
                   <button key={p.id} className="item" aria-current={target?.key === `${platform}:${p.id}`} onClick={() => openPost(p)}>
@@ -189,7 +206,14 @@ export default function Dashboard({ userName }: { userName: string }) {
               </div>
               <div className="list">
                 {error && <div className="banner err">{error}</div>}
-                {!ads && !error && <div className="empty">Choose an ad account, then Show ads.</div>}
+                {adAccounts?.length === 0 && (
+                  <div className="empty">
+                    <strong>No ad accounts are connected.</strong>
+                    <p>Your login doesn&apos;t include any ad accounts. Reconnect and make sure ad access is allowed.</p>
+                    <a className="btn primary" href="/api/auth/login?reconnect=1">Reconnect Facebook</a>
+                  </div>
+                )}
+                {!ads && !error && !!adAccounts?.length && <div className="empty">Choose an ad account, then Show ads.</div>}
                 {ads?.length === 0 && <div className="empty">No ads with this status.</div>}
                 {ads?.map((ad) => (
                   <div key={ad.id} className="ad">
@@ -206,7 +230,7 @@ export default function Dashboard({ userName }: { userName: string }) {
                       {ad.facebook && (ad.facebook.owned ? (
                         <button className="chip" aria-current={target?.key === `facebook:${ad.facebook.postId}`} onClick={() => openAd(ad, "facebook")}>Facebook · {ad.facebook.comments ?? "?"} comments</button>
                       ) : (
-                        <span className="chip off" title={`Page ID ${ad.facebook.pageId} isn't among the Pages you gave access to at login`}>Facebook · Page {ad.facebook.pageId} not connected</span>
+                        <span className="chip off" title="If this is the merchant's own Page, reconnect and tick it. If it's the creator's Page, its comments can't be read.">Facebook · Page {ad.facebook.pageId} not connected</span>
                       ))}
                       {!ad.instagram && !ad.facebook && <span className="chip off">No post found for this ad</span>}
                     </div>
@@ -227,6 +251,43 @@ export default function Dashboard({ userName }: { userName: string }) {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+const PERMISSION_PURPOSE: Record<string, string> = {
+  pages_show_list: "list your Pages",
+  pages_read_engagement: "read posts",
+  pages_read_user_content: "read Facebook comments",
+  pages_manage_engagement: "hide Facebook comments",
+  business_management: "see accounts shared with your business",
+  instagram_basic: "read Instagram posts",
+  instagram_manage_comments: "read and hide Instagram comments",
+  ads_read: "see ads and ad accounts",
+};
+
+function AccessBanner({ pages, missingPermissions }: { pages: PageAcc[] | null; missingPermissions: string[] }) {
+  if (!pages) return null;
+  const noIg = pages.filter((p) => !p.instagram);
+  if (!missingPermissions.length && !noIg.length) return null;
+  return (
+    <div className="access">
+      {missingPermissions.length > 0 && (
+        <div className="access-row">
+          <strong>Some access wasn&apos;t granted.</strong> The app can&apos;t{" "}
+          {missingPermissions.map((p) => PERMISSION_PURPOSE[p] || p).join(", ")}.{" "}
+          <span className="muted">({missingPermissions.join(", ")})</span>
+        </div>
+      )}
+      {noIg.length > 0 && (
+        <div className="access-row">
+          <strong>{noIg.length === pages.length ? "No Instagram accounts are connected." : `${noIg.length} of ${pages.length} Pages have no Instagram account connected:`}</strong>{" "}
+          {noIg.length !== pages.length && noIg.map((p) => p.name).join(", ")}
+          {noIg.length !== pages.length && ". "}
+          If they should have one, tick the Instagram account when you reconnect.
+        </div>
+      )}
+      <a className="btn small primary" href="/api/auth/login?reconnect=1">Reconnect Facebook</a>
     </div>
   );
 }
