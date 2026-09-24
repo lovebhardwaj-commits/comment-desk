@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       id: String(c.id),
       comment: String(c.text || "").slice(0, 1000),
       ...(c.parentText ? { parent_comment: String(c.parentText).slice(0, 300) } : {}),
-      ...(caption ? { post_caption: caption } : {}),
+      ...(c.caption || caption ? { post_caption: String(c.caption || caption).slice(0, 300) } : {}),
     }));
     return { results: await classify(items) };
   });
