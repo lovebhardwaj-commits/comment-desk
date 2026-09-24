@@ -47,7 +47,7 @@ export type LocalResult = {
 
 const REVIEW_BELOW = 0.5;
 
-function toResult(label: string, p: number, reason: string): LocalResult {
+export function toResult(label: string, p: number, reason: string): LocalResult {
   const category = label === "Enquiry" || label === "Positive" ? label : "Negative";
   const negative_type = label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null;
   return { category, negative_type, needs_review: p < REVIEW_BELOW, reason, label: label as Label };

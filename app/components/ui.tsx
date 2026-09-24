@@ -1,9 +1,9 @@
 "use client";
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, AlertCircle, ChevronDown } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { CheckCircle2, AlertCircle, ChevronDown, X } from "lucide-react";
 
 /* ---------- Toasts ---------- */
-type Toast = { id: number; kind: "ok" | "err"; msg: string; undo?: () => void };
+type Toast = { id: number; kind: "ok" | "err"; msg: string; undo?: () => void; action?: { label: string; run: () => void } };
 const ToastCtx = createContext<(t: Omit<Toast, "id">) => void>(() => {});
 export const useToast = () => useContext(ToastCtx);
 
@@ -13,7 +13,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback((t: Omit<Toast, "id">) => {
     const n = ++id.current;
     setToasts((all) => [...all.slice(-2), { ...t, id: n }]);
-    setTimeout(() => setToasts((all) => all.filter((x) => x.id !== n)), t.undo ? 7000 : 4500);
+    setTimeout(() => setToasts((all) => all.filter((x) => x.id !== n)), t.undo || t.action ? 7000 : 4500);
   }, []);
   return (
     <ToastCtx.Provider value={push}>
@@ -23,6 +23,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div key={t.id} className={`toast ${t.kind}`}>
             {t.kind === "ok" ? <CheckCircle2 /> : <AlertCircle />}
             <span className="t-msg">{t.msg}</span>
+            {t.action && (
+              <button className="undo" onClick={() => { t.action!.run(); setToasts((all) => all.filter((x) => x.id !== t.id)); }}>
+                {t.action.label}
+              </button>
+            )}
             {t.undo && (
               <button className="undo" onClick={() => { t.undo!(); setToasts((all) => all.filter((x) => x.id !== t.id)); }}>
                 Undo
@@ -36,11 +41,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 /* ---------- Select pill ---------- */
-export function SelectPill({ icon, label, value, onChange, children, disabled }: {
-  icon?: ReactNode; label: string; value: string; onChange: (v: string) => void; children: ReactNode; disabled?: boolean;
+export function SelectPill({ icon, label, value, onChange, children, disabled, title }: {
+  icon?: ReactNode; label: string; value: string; onChange: (v: string) => void; children: ReactNode; disabled?: boolean; title?: string;
 }) {
   return (
-    <label className="pill">
+    <label className="pill" title={title}>
       {icon}
       <span className="sr">{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>{children}</select>
@@ -88,3 +93,28 @@ export function CommentSkeleton({ rows = 4 }: { rows?: number }) {
 
 export const initials = (name: string) =>
   (name || "?").replace(/[^\p{L}\p{N} ]/gu, "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+
+/* ---------- Modal ---------- */
+export function Modal({ open, onClose, title, children, footer, busy }: {
+  open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; busy?: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onClose]);
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={busy} aria-label="Close"><X /></button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer && <div className="modal-foot">{footer}</div>}
+      </div>
+    </div>
+  );
+}
