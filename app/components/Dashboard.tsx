@@ -1,9 +1,9 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList } from "lucide-react";
 import { api, fmtDate } from "./api";
 import Shell, { type View } from "./Shell";
-import CommentsPanel, { type Target } from "./CommentsPanel";
+import CommentsPanel, { type Target, type InboxData, type Src } from "./CommentsPanel";
 import { ToastProvider, SelectPill, Empty, ListSkeleton } from "./ui";
 
 type PageAcc = { id: string; name: string; instagram: { id: string; username: string } | null };
@@ -60,6 +60,13 @@ function App({ userName }: { userName: string }) {
 
   const [accountsError, setAccountsError] = useState("");
 
+  // 7-day inbox: the default way in, so every comment can be handled in one pass.
+  const [postsMode, setPostsMode] = useState<"inbox" | "list">("inbox");
+  const [adsMode, setAdsMode] = useState<"inbox" | "list">("inbox");
+  const [days, setDays] = useState(7);
+  const [inboxNonce, setInboxNonce] = useState(0);
+  const pendingTarget = useRef<Target | null>(null);
+
   useEffect(() => {
     api<{ pages: PageAcc[]; missingPermissions: string[] }>("/api/accounts")
       .then((d) => {
@@ -101,8 +108,13 @@ function App({ userName }: { userName: string }) {
       setPostsNext(d.next);
       setFetchedAt(timeNow());
       if (!after && view === "posts") {
-        const first = d.posts.find((p) => p.comments > 0) || d.posts[0];
-        setTarget(first ? postTarget(first, platform, page) : null);
+        if (pendingTarget.current) {
+          setTarget(pendingTarget.current);
+          pendingTarget.current = null;
+        } else {
+          const first = d.posts.find((p) => p.comments > 0) || d.posts[0];
+          setTarget(first ? postTarget(first, platform, page) : null);
+        }
       }
     } catch (e: any) {
       setPostsError(e.message);
@@ -112,11 +124,11 @@ function App({ userName }: { userName: string }) {
 
   // Load posts automatically when the Page, platform or dates change.
   useEffect(() => {
-    if (view !== "posts" || !page) return;
+    if (view !== "posts" || !page || postsMode !== "list") return;
     const t = setTimeout(() => loadPosts(), 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, platform, since, until, view, pages]);
+  }, [pageId, platform, since, until, view, pages, postsMode]);
 
   const loadAds = useCallback(async (after?: string) => {
     if (!adAccountId) return;
@@ -135,9 +147,9 @@ function App({ userName }: { userName: string }) {
   }, [adAccountId, adStatus]);
 
   useEffect(() => {
-    if (view === "ads" && adAccountId) loadAds();
+    if (view === "ads" && adAccountId && adsMode === "list") loadAds();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adAccountId, adStatus, view]);
+  }, [adAccountId, adStatus, view, adsMode]);
 
   function switchView(v: View) {
     setView(v);
@@ -175,11 +187,60 @@ function App({ userName }: { userName: string }) {
   const shownAds = showLocked ? [...readableAds, ...lockedAds] : readableAds;
   const currentAd = ads?.find((a) => a.id === adId);
 
-  // Open the ad with the most comments once ads load.
+  // Open the ad with the most comments once ads load (or the ad chosen from the inbox).
   useEffect(() => {
-    if (view === "ads" && ads && !adId && readableAds[0]) openAdCard(readableAds[0]);
+    if (view === "ads" && adsMode === "list" && ads && pendingTarget.current) {
+      const t = pendingTarget.current;
+      pendingTarget.current = null;
+      const ad = ads.find((a) => a.id === (t as any).adId);
+      if (ad) { openAd(ad, t.platform); return; }
+    }
+    if (view === "ads" && adsMode === "list" && ads && !adId && readableAds[0]) openAdCard(readableAds[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ads, view]);
+  }, [ads, view, adsMode]);
+
+  /** Inbox specs: every comment from the last N days, for the brand's posts or the ad account's ads. */
+  const postsInbox = page ? {
+    key: `inbox:posts:${page.id}:${days}:${inboxNonce}`, days,
+    scope: `${page.name} · ${page.instagram ? "Instagram and Facebook" : "Facebook"} posts from the last 60 days`,
+    load: () => api<InboxData>(`/api/inbox?${new URLSearchParams({ source: "posts", pageId: page.id, days: String(days) })}`).then((d) => { setFetchedAt(timeNow()); return d; }),
+    onOpen: (src: Src) => {
+      // Jump to this post in the "By post" view.
+      pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: page.id,
+        brandUsername: src.brandUsername, title: src.label, caption: src.caption, permalink: src.permalink || "", image: src.image || undefined, kind: "post" };
+      setPlatform(src.platform);
+      setPostsMode("list");
+    },
+  } : undefined;
+  const adAccountName = adAccounts?.find((a) => a.id === adAccountId)?.name || "";
+  const adsInbox = adAccountId ? {
+    key: `inbox:ads:${adAccountId}:${adStatus}:${days}:${inboxNonce}`, days, noun: "ad" as const,
+    scope: `${adAccountName} · ${adStatus === "active" ? "active" : "active and paused"} ads on Instagram and Facebook`,
+    load: () => api<InboxData>(`/api/inbox?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus, days: String(days) })}`).then((d) => { setAdsFetchedAt(timeNow()); return d; }),
+    onOpen: (src: Src) => {
+      pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: src.pageId,
+        brandUsername: src.brandUsername, title: src.label, caption: src.caption, permalink: src.permalink || "", image: src.image || undefined, kind: "ad", ...( { adId: src.adId } as any) };
+      setAdId("");
+      setAdsMode("list");
+    },
+  } : undefined;
+
+  const ModeTabs = ({ mode, setMode, listLabel }: { mode: "inbox" | "list"; setMode: (m: "inbox" | "list") => void; listLabel: string }) => (
+    <div className="mode-tabs">
+      <div className="seg" role="tablist" aria-label="View">
+        <button role="tab" aria-pressed={mode === "inbox"} onClick={() => setMode("inbox")}><Inbox />All comments</button>
+        <button role="tab" aria-pressed={mode === "list"} onClick={() => setMode("list")}><LayoutList />{listLabel}</button>
+      </div>
+    </div>
+  );
+
+  const DaysSeg = () => (
+    <div className="seg" role="group" aria-label="Time window">
+      {[1, 7, 14].map((d) => (
+        <button key={d} aria-pressed={days === d} onClick={() => setDays(d)}>{d === 1 ? "24 hours" : `${d} days`}</button>
+      ))}
+    </div>
+  );
 
   const noPages = pages?.length === 0;
 
@@ -190,7 +251,7 @@ function App({ userName }: { userName: string }) {
           <header className="page-head">
             <div>
               <h1 className="page-title">Post comments</h1>
-              <p className="page-sub">Every comment on your organic posts, sorted into Enquiry, Positive and Negative.</p>
+              <p className="page-sub">{postsMode === "inbox" ? "Every new comment across your Instagram and Facebook posts, in one place." : "Every comment on your organic posts, sorted into Enquiry, Positive and Negative."}</p>
               {fetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {fetchedAt}</div>}
             </div>
             <div className="controls">
@@ -204,18 +265,21 @@ function App({ userName }: { userName: string }) {
                 {noPages && <option>No Pages connected</option>}
                 {pages?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </SelectPill>
-              <label className="pill dates" aria-label="Date range">
-                <CalendarDays />
-                <input type="date" value={since} max={until} onChange={(e) => e.target.value && setSince(e.target.value)} aria-label="From" />
-                <span className="dash">–</span>
-                <input type="date" value={until} min={since} max={iso(new Date())} onChange={(e) => e.target.value && setUntil(e.target.value)} aria-label="To" />
-              </label>
-              <button className="btn btn-icon" onClick={() => loadPosts()} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
+              {postsMode === "inbox" ? <DaysSeg /> : (
+                <label className="pill dates" aria-label="Date range">
+                  <CalendarDays />
+                  <input type="date" value={since} max={until} onChange={(e) => e.target.value && setSince(e.target.value)} aria-label="From" />
+                  <span className="dash">–</span>
+                  <input type="date" value={until} min={since} max={iso(new Date())} onChange={(e) => e.target.value && setUntil(e.target.value)} aria-label="To" />
+                </label>
+              )}
+              <button className="btn btn-icon" onClick={() => (postsMode === "inbox" ? setInboxNonce((n) => n + 1) : loadPosts())} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={postsBusy ? "spin" : undefined} />
               </button>
             </div>
           </header>
 
+          <ModeTabs mode={postsMode} setMode={(m) => { setPostsMode(m); if (m === "inbox") setTarget(null); }} listLabel="By post" />
           <AccessCallout pages={pages} page={page} missingPermissions={missingPermissions} />
           {accountsError && <div className="callout danger"><div className="callout-main"><div className="callout-tag">Error</div><div className="callout-body">{accountsError}</div></div></div>}
 
@@ -225,6 +289,12 @@ function App({ userName }: { userName: string }) {
                 action={<a className="btn btn-primary" href={RECONNECT}>Reconnect Facebook</a>}>
                 Log in again and tick the merchant&apos;s Page, its Instagram account and your business in the Facebook pop-up.
               </Empty>
+            </div>
+          ) : postsMode === "inbox" ? (
+            <div className="workspace single">
+              <section className="detail" aria-label="All comments">
+                {postsInbox ? <CommentsPanel key={postsInbox.key} inbox={postsInbox} /> : <div className="card"><Empty icon={<Inbox />} title="Loading Pages…" /></div>}
+              </section>
             </div>
           ) : (
             <div className="workspace">
@@ -279,7 +349,7 @@ function App({ userName }: { userName: string }) {
           <header className="page-head">
             <div>
               <h1 className="page-title">Ad comments</h1>
-              <p className="page-sub">Comments on the posts behind your ads, where most complaints and spam land.</p>
+              <p className="page-sub">{adsMode === "inbox" ? "Every new comment across all your ads, in one place." : "Comments on the posts behind your ads, where most complaints and spam land."}</p>
               {adsFetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {adsFetchedAt}</div>}
             </div>
             <div className="controls">
@@ -288,12 +358,22 @@ function App({ userName }: { userName: string }) {
                 {adAccounts?.length === 0 && <option>No ad accounts connected</option>}
                 {adAccounts?.map((a) => <option key={a.id} value={a.id}>{a.name}{a.active ? "" : " (inactive)"}</option>)}
               </SelectPill>
-              <button className="btn btn-icon" onClick={() => loadAds()} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
+              {adsMode === "inbox" && (
+                <>
+                  <div className="seg" role="group" aria-label="Ad status">
+                    <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active</button>
+                    <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>+ Paused</button>
+                  </div>
+                  <DaysSeg />
+                </>
+              )}
+              <button className="btn btn-icon" onClick={() => (adsMode === "inbox" ? setInboxNonce((n) => n + 1) : loadAds())} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={adsBusy ? "spin" : undefined} />
               </button>
             </div>
           </header>
 
+          <ModeTabs mode={adsMode} setMode={(m) => { setAdsMode(m); if (m === "inbox") { setTarget(null); setAdId(""); } }} listLabel="By ad" />
           <AccessCallout pages={pages} page={undefined} missingPermissions={missingPermissions} />
 
           {adAccounts?.length === 0 ? (
@@ -301,6 +381,12 @@ function App({ userName }: { userName: string }) {
               <Empty icon={<PlugZap />} title="No ad accounts connected" action={<a className="btn btn-primary" href={RECONNECT}>Reconnect Facebook</a>}>
                 Your login doesn&apos;t include any ad accounts. Reconnect and allow access to the merchant&apos;s ad account.
               </Empty>
+            </div>
+          ) : adsMode === "inbox" ? (
+            <div className="workspace single">
+              <section className="detail" aria-label="All ad comments">
+                {adsInbox ? <CommentsPanel key={adsInbox.key} inbox={adsInbox} /> : <div className="card"><Empty icon={<Inbox />} title="Loading ad accounts…" /></div>}
+              </section>
             </div>
           ) : (
             <div className="workspace">
