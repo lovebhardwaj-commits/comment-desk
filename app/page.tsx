@@ -3,8 +3,32 @@ import Dashboard from "./components/Dashboard";
 
 export const dynamic = "force-dynamic";
 
+function missingSettings() {
+  const missing: string[] = [];
+  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) missing.push("SESSION_SECRET (must be at least 32 characters)");
+  if (!process.env.META_APP_ID) missing.push("META_APP_ID");
+  if (!process.env.META_APP_SECRET) missing.push("META_APP_SECRET");
+  return missing;
+}
+
 export default async function Home({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
+
+  const missing = missingSettings();
+  if (missing.length) {
+    return (
+      <main className="login">
+        <div className="login-card">
+          <div className="brand-mark" aria-hidden>CD</div>
+          <h1>Setup needed</h1>
+          <p>These environment variables are missing or invalid in Vercel:</p>
+          <ul>{missing.map((m) => <li key={m}><code>{m}</code></li>)}</ul>
+          <p className="fine">Add them in Vercel → Project → Settings → Environment Variables, then redeploy.</p>
+        </div>
+      </main>
+    );
+  }
+
   const s = await getSession();
   const loggedIn = !!s.userToken && (!s.expiresAt || Date.now() < s.expiresAt);
 
