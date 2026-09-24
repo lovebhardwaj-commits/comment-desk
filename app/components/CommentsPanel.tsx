@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { api, fmtDateTime } from "./api";
-import { useToast, Empty, CommentSkeleton, initials } from "./ui";
+import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -37,7 +37,10 @@ const KPI: { key: Filter; label: string; color: string }[] = [
 
 const CHUNK = 100;
 
-export default function CommentsPanel({ target }: { target: Target }) {
+type HideResult = { id: string; ok: boolean; verified: boolean; hidden: boolean; error?: string };
+const BATCH = 50;
+
+export default function CommentsPanel({ target, headerExtra }: { target: Target; headerExtra?: ReactNode }) {
   const toast = useToast();
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [results, setResults] = useState<Record<string, Result>>({});
@@ -51,6 +54,14 @@ export default function CommentsPanel({ target }: { target: Target }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [captionOpen, setCaptionOpen] = useState(false);
   const [warnedNotSaved, setWarnedNotSaved] = useState(false);
+  const [verified, setVerified] = useState<Set<string>>(new Set());
+  const [moving, setMoving] = useState<Record<string, string>>({});
+  const movingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Hide-all dialog
+  const [hideAllOpen, setHideAllOpen] = useState(false);
+  const [skipComplaints, setSkipComplaints] = useState(false);
+  const [hideAllRun, setHideAllRun] = useState<{ done: number; total: number } | null>(null);
+  const [hideAllResult, setHideAllResult] = useState<{ hidden: string[]; failed: HideResult[] } | null>(null);
 
   async function categorise(list: Comment[]) {
     const todo = list.filter((c) => !c.isBrand && c.text.trim());
@@ -79,62 +90,113 @@ export default function CommentsPanel({ target }: { target: Target }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.key]);
 
-  const pageIdFor = (c: Comment) => target.pageId || c.id.split("_")[0];
-
-  async function setHidden(ids: string[], hide: boolean): Promise<string[]> {
-    const done: string[] = [];
+  /** Hides or unhides comments in batches of 50. Meta confirms each one by reading it back. */
+  async function setHidden(ids: string[], hide: boolean, onProgress?: (done: number) => void): Promise<HideResult[]> {
+    const all: HideResult[] = [];
     setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((i) => [i, true])) }));
-    for (const id of ids) {
-      const c = comments?.find((x) => x.id === id);
-      if (!c) continue;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const chunk = ids.slice(i, i + BATCH);
       try {
-        await api("/api/hide", { method: "POST", body: JSON.stringify({ platform: target.platform, commentId: id, pageId: pageIdFor(c), hide }) });
-        done.push(id);
-        setComments((list) => list?.map((x) => (x.id === id ? { ...x, hidden: hide } : x)) || null);
+        const d = await api<{ results: HideResult[] }>("/api/hide", {
+          method: "POST",
+          body: JSON.stringify({ platform: target.platform, pageId: target.pageId || chunk[0].split("_")[0], hide, commentIds: chunk }),
+        });
+        all.push(...d.results);
+        const byId = new Map(d.results.map((r) => [r.id, r]));
+        setComments((list) => list?.map((x) => (byId.has(x.id) ? { ...x, hidden: byId.get(x.id)!.hidden } : x)) || null);
+        setVerified((v) => {
+          const n = new Set(v);
+          for (const r of d.results) (r.verified && hide ? n.add(r.id) : n.delete(r.id));
+          return n;
+        });
       } catch (e: any) {
-        toast({ kind: "err", msg: `Couldn't ${hide ? "hide" : "unhide"} a comment: ${e.message}` });
+        all.push(...chunk.map((id) => ({ id, ok: false, verified: false, hidden: !hide, error: e.message })));
       }
+      onProgress?.(Math.min(i + BATCH, ids.length));
     }
     setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((i) => [i, false])) }));
-    return done;
+    return all;
   }
 
   async function hideWithUndo(ids: string[]) {
-    const done = await setHidden(ids, true);
-    if (!done.length) return;
+    const res = await setHidden(ids, true);
+    const done = res.filter((r) => r.ok).map((r) => r.id);
+    const failed = res.filter((r) => !r.ok);
     setSelected(new Set());
+    if (failed.length) toast({ kind: "err", msg: `${failed.length === res.length ? "Couldn't hide" : `${failed.length} couldn't be hidden`}: ${failed[0].error}` });
+    if (!done.length) return;
+    const allVerified = res.filter((r) => r.ok).every((r) => r.verified);
     toast({
       kind: "ok",
-      msg: done.length === 1 ? "Comment hidden. Only the writer and their friends can see it now." : `${done.length} comments hidden.`,
-      undo: () => setHidden(done, false).then((u) => u.length && toast({ kind: "ok", msg: u.length === 1 ? "Comment is visible again." : `${u.length} comments are visible again.` })),
+      msg: `${done.length === 1 ? "Comment hidden" : `${done.length} comments hidden`}${allVerified ? " and confirmed by Meta" : ""}. The writer and their friends can still see ${done.length === 1 ? "it" : "them"}.`,
+      undo: () => unhideMany(done),
     });
   }
 
-  async function unhide(c: Comment) {
-    const done = await setHidden([c.id], false);
-    if (done.length) toast({ kind: "ok", msg: "Comment is visible again." });
+  async function unhideMany(ids: string[]) {
+    const res = await setHidden(ids, false);
+    const ok = res.filter((r) => r.ok).length;
+    if (ok) toast({ kind: "ok", msg: ok === 1 ? "Comment is visible again." : `${ok} comments are visible again.` });
+    const failed = res.filter((r) => !r.ok);
+    if (failed.length) toast({ kind: "err", msg: `${failed.length} couldn't be unhidden: ${failed[0].error}` });
   }
 
+  async function unhide(c: Comment) {
+    await unhideMany([c.id]);
+  }
+
+  async function runHideAll() {
+    const ids = negativeTargets.filter((c) => !(skipComplaints && results[c.id]?.negative_type === "complaint")).map((c) => c.id);
+    if (!ids.length) return;
+    setHideAllResult(null);
+    setHideAllRun({ done: 0, total: ids.length });
+    const res = await setHidden(ids, true, (done) => setHideAllRun({ done, total: ids.length }));
+    setHideAllRun(null);
+    setHideAllResult({ hidden: res.filter((r) => r.ok).map((r) => r.id), failed: res.filter((r) => !r.ok) });
+    setSelected(new Set());
+  }
+
+  function closeHideAll() {
+    if (hideAllRun) return;
+    setHideAllOpen(false);
+    setHideAllResult(null);
+  }
+
+  const resultFor = (label: string): Result => ({
+    category: label === "Enquiry" || label === "Positive" ? (label as Category) : "Negative",
+    negative_type: label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null,
+    needs_review: false, reason: "Corrected by your team", label,
+  });
+
+  /** Changes a comment's category straight away, saves it in the background, and puts it back if saving fails. */
   async function correct(c: Comment, label: string) {
-    setBusy((b) => ({ ...b, [`fix:${c.id}`]: true }));
+    const same = (x: Comment) => x.text.trim().toLowerCase() === c.text.trim().toLowerCase();
+    const ids = (comments || []).filter(same).map((x) => x.id);
+    const before = Object.fromEntries(ids.map((id) => [id, results[id]]));
+    const next = resultFor(label);
+    setResults((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, next])) }));
+
+    const name = CHOICES.find(([v]) => v === label)?.[1] || label;
+    const newCat = next.category;
+    const leaves = filter !== "All" && filter !== "Review" && newCat !== filter;
+    if (leaves) {
+      // Keep it on screen briefly so the person sees where it went, then let it leave this view.
+      clearTimeout(movingTimers.current[c.id]);
+      setMoving((m) => ({ ...m, [c.id]: newCat }));
+      movingTimers.current[c.id] = setTimeout(() => setMoving((m) => { const n = { ...m }; delete n[c.id]; return n; }), 1600);
+    }
+    toast({ kind: "ok", msg: `Moved to ${name}.`, action: leaves ? { label: `View ${newCat}`, run: () => setFilter(newCat as Filter) } : undefined });
+
     try {
-      const d = await api<{ result: Result; persistent: boolean }>("/api/label", { method: "POST", body: JSON.stringify({ text: c.text, label }) });
-      const same = (x: Comment) => x.text.trim().toLowerCase() === c.text.trim().toLowerCase();
-      setResults((r) => {
-        const next = { ...r };
-        for (const x of comments || []) if (same(x)) next[x.id] = d.result;
-        return next;
-      });
-      const name = CHOICES.find(([v]) => v === label)?.[1] || label;
-      toast({ kind: "ok", msg: d.persistent ? `Saved as ${name}. Comment Pulse will learn from this.` : `Changed to ${name}.` });
+      const d = await api<{ persistent: boolean }>("/api/label", { method: "POST", body: JSON.stringify({ text: c.text, label }) });
       if (!d.persistent && !warnedNotSaved) {
         setWarnedNotSaved(true);
         toast({ kind: "err", msg: "Corrections aren't stored permanently yet: add Upstash Redis in Vercel (see README)." });
       }
     } catch (e: any) {
-      toast({ kind: "err", msg: `Couldn't save the correction: ${e.message}` });
-    } finally {
-      setBusy((b) => ({ ...b, [`fix:${c.id}`]: false }));
+      setResults((r) => ({ ...r, ...before }));
+      setMoving((m) => { const n = { ...m }; delete n[c.id]; return n; });
+      toast({ kind: "err", msg: `Couldn't save the correction, so it was put back: ${e.message}` });
     }
   }
 
@@ -196,6 +258,7 @@ export default function CommentsPanel({ target }: { target: Target }) {
       if (c.isBrand) return showBrand && filter === "All" && !q;
       if (q && !c.text.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
       if (filter === "All") return true;
+      if (moving[c.id]) return true;
       const r = results[c.id];
       if (filter === "Review") return !!r?.needs_review;
       return r?.category === filter;
@@ -209,9 +272,16 @@ export default function CommentsPanel({ target }: { target: Target }) {
       for (const r of list) if (r.parentId === t.id) out.push(r);
     }
     return out;
-  }, [comments, results, filter, query, sort, showBrand]);
+  }, [comments, results, filter, query, sort, showBrand, moving]);
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
+  const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
+  const negBreakdown = {
+    complaint: negativeTargets.filter((c) => results[c.id]?.negative_type === "complaint").length,
+    criticism: negativeTargets.filter((c) => results[c.id]?.negative_type === "criticism" || results[c.id]?.negative_type === "abuse").length,
+    spam: negativeTargets.filter((c) => results[c.id]?.negative_type === "spam").length,
+  };
+  const hideAllCount = negativeTargets.length - (skipComplaints ? negBreakdown.complaint : 0);
   const selectedHideable = [...selected].filter((id) => hideable.some((c) => c.id === id));
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
@@ -234,6 +304,7 @@ export default function CommentsPanel({ target }: { target: Target }) {
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target.platform === "instagram" ? "Instagram" : "Facebook"}{target.kind === "ad" ? " ad" : " post"}</span>
             {target.permalink && <a href={target.permalink} target="_blank" rel="noreferrer">Open on {target.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
           </div>
+          {headerExtra && <div className="hero-switch">{headerExtra}</div>}
         </div>
       </div>
 
@@ -279,6 +350,11 @@ export default function CommentsPanel({ target }: { target: Target }) {
           <button aria-pressed={sort === "oldest"} onClick={() => setSort("oldest")}>Oldest</button>
         </div>
         <span className="spacer" />
+        {negativeTargets.length > 0 && !progress && (
+          <button className="btn btn-sm btn-danger" onClick={() => { setHideAllResult(null); setHideAllOpen(true); }}>
+            <EyeOff />Hide all negative ({negativeTargets.length})
+          </button>
+        )}
         <label className="toggle">
           <input type="checkbox" checked={showBrand} onChange={(e) => setShowBrand(e.target.checked)} />
           <span className="track" />Brand replies
@@ -307,12 +383,71 @@ export default function CommentsPanel({ target }: { target: Target }) {
         <div className="card"><Empty small icon={<Search />} title="Nothing matches">Try another filter or search.</Empty></div>
       )}
 
+      <Modal open={hideAllOpen} onClose={closeHideAll} busy={!!hideAllRun}
+        title={hideAllResult ? "Done" : `Hide ${hideAllCount} negative ${hideAllCount === 1 ? "comment" : "comments"}?`}
+        footer={hideAllResult ? (
+          <>
+            {hideAllResult.hidden.length > 0 && (
+              <button className="btn" onClick={async () => { const ids = hideAllResult.hidden; closeHideAll(); await unhideMany(ids); }}>Undo, unhide {hideAllResult.hidden.length}</button>
+            )}
+            <button className="btn btn-primary" onClick={closeHideAll}>Close</button>
+          </>
+        ) : (
+          <>
+            <button className="btn" onClick={closeHideAll} disabled={!!hideAllRun}>Cancel</button>
+            <button className="btn btn-primary" onClick={runHideAll} disabled={!!hideAllRun || hideAllCount === 0}>
+              <EyeOff />{hideAllRun ? `Hiding ${hideAllRun.done} of ${hideAllRun.total}…` : `Hide ${hideAllCount}`}
+            </button>
+          </>
+        )}>
+        {hideAllResult ? (
+          <>
+            <div className="big-stat">
+              <span className={`ok-icon${hideAllResult.hidden.length ? "" : " err"}`}>{hideAllResult.hidden.length ? <CheckCircle2 /> : <AlertTriangle />}</span>
+              <div>
+                <strong>{hideAllResult.hidden.length} {hideAllResult.hidden.length === 1 ? "comment" : "comments"} hidden</strong>
+                {hideAllResult.hidden.length > 0 && <span className="fine-note">Meta confirmed each one after hiding.</span>}
+              </div>
+            </div>
+            {hideAllResult.failed.length > 0 && (
+              <>
+                <div><strong style={{ color: "var(--negative)" }}>{hideAllResult.failed.length} couldn&apos;t be hidden</strong></div>
+                <div className="result-list">
+                  {hideAllResult.failed.map((f) => {
+                    const c = comments?.find((x) => x.id === f.id);
+                    return <div key={f.id}><b>{c?.author || "Comment"}</b><span>{f.error}</span></div>;
+                  })}
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="breakdown">
+              {negBreakdown.complaint > 0 && <span>{negBreakdown.complaint} complaint{negBreakdown.complaint === 1 ? "" : "s"}</span>}
+              {negBreakdown.criticism > 0 && <span>{negBreakdown.criticism} criticism</span>}
+              {negBreakdown.spam > 0 && <span>{negBreakdown.spam} spam</span>}
+            </div>
+            {negBreakdown.complaint > 0 && (
+              <label className="checkrow">
+                <input type="checkbox" className="check" checked={skipComplaints} onChange={(e) => setSkipComplaints(e.target.checked)} disabled={!!hideAllRun} />
+                <span>Skip complaints
+                  <small>Customers with an order problem can still see their own comment. Reply to them first, then hide.</small>
+                </span>
+              </label>
+            )}
+            <div className="fine-note">Comments are hidden in batches of 50 and each one is checked with Meta afterwards. Hidden comments stay visible to the person who wrote them and their friends. You can unhide them any time.</div>
+            {hideAllRun && <div className="progress"><i style={{ width: `${(100 * hideAllRun.done) / hideAllRun.total}%` }} /></div>}
+          </>
+        )}
+      </Modal>
+
       <div className="comments">
         {visible.map((c) => {
           const r = results[c.id];
           const isSel = selected.has(c.id);
           return (
-            <article key={c.id} className={`comment${c.parentId ? " is-reply" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}`}>
+            <article key={c.id} className={`comment${c.parentId ? " is-reply" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}${moving[c.id] ? " moving" : ""}`}>
               <div className="c-side">
                 <span className="avatar">{c.isBrand ? <BadgeCheck size={15} /> : initials(c.author)}</span>
                 {c.canHide && !c.hidden && (
@@ -324,7 +459,10 @@ export default function CommentsPanel({ target }: { target: Target }) {
                   <span className="c-author">{c.author || "Unknown"}</span>
                   <span>{fmtDateTime(c.time)}</span>
                   {c.isBrand && <span className="tag tag-brand">Brand</span>}
-                  {c.hidden && <span className="tag tag-hidden"><EyeOff />Hidden</span>}
+                  {c.hidden && (verified.has(c.id)
+                    ? <span className="tag tag-verified" title="Meta confirmed this comment is hidden"><ShieldCheck />Hidden · confirmed</span>
+                    : <span className="tag tag-hidden"><EyeOff />Hidden</span>)}
+                  {moving[c.id] && <span className="moved-note"><ArrowRight />Moved to {moving[c.id]}</span>}
                   {!c.isBrand && replied.has(c.id) && <span className="tag tag-fixed"><CornerDownRight />Brand replied</span>}
                 </div>
                 {c.parentId && c.parentText && <div className="c-parent">Replying to: {c.parentText}</div>}
