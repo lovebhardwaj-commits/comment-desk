@@ -8,8 +8,8 @@ type Post = { id: string; text: string; time: string; permalink: string; comment
 type AdAcc = { id: string; name: string; active: boolean };
 type Ad = {
   id: string; name: string; status: string; created: string;
-  instagram: { mediaId: string; owned: boolean; ownerUsername: string; brandUsername: string; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean } | null;
-  facebook: { postId: string; pageId: string; owned: boolean; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean } | null;
+  instagram: { mediaId: string; owned: boolean; ownerUsername: string; brandUsername: string; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean; error?: string } | null;
+  facebook: { postId: string; pageId: string; owned: boolean; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean; error?: string } | null;
 };
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -196,18 +196,23 @@ export default function Dashboard({ userName }: { userName: string }) {
                     <div className={`status ${ad.status}`}>{ad.status.toLowerCase()} · {fmtDate(ad.created)}</div>
                     <div className="name">{ad.name}</div>
                     <div className="plats">
-                      {ad.instagram && (ad.instagram.owned ? (
+                      {ad.instagram && ad.instagram.unreadable ? (
+                        <span className="chip off" title={ad.instagram.error}>Instagram · couldn&apos;t read this ad&apos;s post</span>
+                      ) : ad.instagram && (ad.instagram.owned ? (
                         <button className="chip" aria-current={target?.key === `instagram:${ad.instagram.mediaId}`} onClick={() => openAd(ad, "instagram")}>Instagram · {ad.instagram.comments ?? "?"} comments</button>
                       ) : (
-                        <span className="chip off" title="This ad's post is on another account, so its comments can't be read here">Instagram · on @{ad.instagram.ownerUsername || "another account"} (partner)</span>
+                        <span className="chip off" title="This ad's post belongs to another Instagram account, so its comments can't be read here">Instagram · on @{ad.instagram.ownerUsername} (partner)</span>
                       ))}
                       {ad.facebook && (ad.facebook.owned ? (
                         <button className="chip" aria-current={target?.key === `facebook:${ad.facebook.postId}`} onClick={() => openAd(ad, "facebook")}>Facebook · {ad.facebook.comments ?? "?"} comments</button>
                       ) : (
-                        <span className="chip off" title="This ad's post is on a Page you don't manage">Facebook · on another Page (partner)</span>
+                        <span className="chip off" title={`Page ID ${ad.facebook.pageId} isn't among the Pages you gave access to at login`}>Facebook · Page {ad.facebook.pageId} not connected</span>
                       ))}
                       {!ad.instagram && !ad.facebook && <span className="chip off">No post found for this ad</span>}
                     </div>
+                    {(ad.instagram?.error || ad.facebook?.error) && (
+                      <div className="note">Meta said: {ad.instagram?.error || ad.facebook?.error}</div>
+                    )}
                   </div>
                 ))}
                 {adsNext && <div className="more"><button className="btn" disabled={busy} onClick={() => loadAds(adsNext)}>Load more</button></div>}

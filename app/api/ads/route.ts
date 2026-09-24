@@ -40,8 +40,8 @@ export async function GET(req: NextRequest) {
               permalink: m.permalink,
               caption: m.caption || "",
             };
-          } catch {
-            instagram = { mediaId, owned: false, ownerUsername: "", brandUsername: "", comments: null, permalink: null, caption: "", unreadable: true };
+          } catch (e: any) {
+            instagram = { mediaId, owned: false, ownerUsername: "", brandUsername: "", comments: null, permalink: null, caption: "", unreadable: true, error: String(e?.message || "Unknown error") };
           }
         }
         let facebook: any = null;
@@ -49,15 +49,16 @@ export async function GET(req: NextRequest) {
           const postId = c.effective_object_story_id;
           const pageId = String(postId).split("_")[0];
           const page = pageById.get(pageId);
-          facebook = { postId, pageId, owned: !!page, comments: null, permalink: null, caption: "" };
+          facebook = { postId, pageId, owned: !!page, comments: null, permalink: null, caption: "", unreadable: false, error: "" };
           if (page) {
             try {
               const p: any = await graph(postId, page.access_token, { fields: "id,message,permalink_url,comments.limit(0).summary(true)" });
               facebook.comments = p.comments?.summary?.total_count ?? 0;
               facebook.permalink = p.permalink_url;
               facebook.caption = p.message || "";
-            } catch {
+            } catch (e: any) {
               facebook.unreadable = true;
+              facebook.error = String(e?.message || "Unknown error");
             }
           }
         }
