@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     } else {
       raw = await graph(`${id}/published_posts`, await pageToken(userToken, id), {
         ...range,
-        fields: "id,message,created_time,permalink_url,full_picture,comments.limit(0).summary(true)",
+        fields: "id,message,created_time,permalink_url,full_picture,comments.filter(stream).limit(0).summary(true)",
       });
       posts = (raw.data || []).map((p: any) => ({
         id: p.id,

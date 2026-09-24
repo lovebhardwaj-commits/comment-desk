@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { MessagesSquare, Megaphone, PanelLeft, LogOut, Menu, Activity } from "lucide-react";
 import { initials } from "./ui";
+import { cacheClear } from "./cache";
 
 export type View = "posts" | "ads";
 
@@ -25,6 +26,7 @@ export default function Shell({ view, onView, userName, children }: { view: View
   const go = (v: View) => { onView(v); setMobileOpen(false); };
 
   async function logout() {
+    await cacheClear(); // saved comments belong to this login only
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/";
   }

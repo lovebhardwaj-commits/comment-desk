@@ -44,7 +44,7 @@ export async function listAds(userToken: string, adAccountId: string, statuses: 
         facebook = { postId, pageId, owned: !!page, comments: null, permalink: null, caption: "", unreadable: false, error: "" };
         if (page) {
           try {
-            const p: any = await graph(postId, page.access_token, { fields: "id,message,permalink_url,full_picture,comments.limit(0).summary(true)" });
+            const p: any = await graph(postId, page.access_token, { fields: "id,message,permalink_url,full_picture,comments.filter(stream).limit(0).summary(true)" });
             facebook.comments = p.comments?.summary?.total_count ?? 0;
             facebook.permalink = p.permalink_url;
             facebook.caption = p.message || "";

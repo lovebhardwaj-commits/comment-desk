@@ -46,7 +46,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
 
   const s = await getSession();
   const loggedIn = !!s.userToken && (!s.expiresAt || Date.now() < s.expiresAt);
-  if (loggedIn) return <Dashboard userName={s.userName || ""} />;
+  if (loggedIn) return <Dashboard userName={s.userName || ""} userId={s.userId || ""} />;
 
   return (
     <Card>
