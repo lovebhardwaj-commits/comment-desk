@@ -2,11 +2,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight } from "lucide-react";
 import { api, fmtDateTime } from "./api";
+import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
   brandUsername: string; title: string; caption: string; permalink: string; image?: string; kind?: "post" | "ad";
+  /** Comment count Meta reported for this post. If it matches the cached copy, the cache is reused without fetching. */
+  count?: number;
 };
 export type Src = {
   platform: "instagram" | "facebook"; pageId: string; objectId: string; brandUsername: string;
@@ -16,8 +19,39 @@ type Comment = {
   id: string; text: string; time: string; author: string; hidden: boolean; canHide: boolean;
   parentId: string | null; parentText: string | null; isBrand: boolean; src?: Src;
 };
-export type InboxData = { comments: Comment[]; scanned: number; withNew: number; skipped: number; failed: number; since: string };
-export type InboxSpec = { key: string; days: number; scope: string; noun?: "post" | "ad"; load: () => Promise<InboxData>; onOpen?: (src: Src) => void };
+type InboxTarget = Src & { count: number };
+export type InboxSpec = {
+  key: string; cacheKey: string; days: number; scope: string; noun?: "post" | "ad"; targetsUrl: string;
+  refresh: number; onOpen?: (src: Src) => void; onFetched?: () => void;
+};
+type Sync = {
+  phase: "loading" | "checking" | "updating" | "ready" | "error";
+  cachedAt?: number; checkedAt?: number; total?: number; loaded?: number; changed?: number; checked?: number;
+  failed?: number; skipped?: number; withNew?: number; error?: string;
+};
+type InboxCache = { byObj: Record<string, Comment[]>; counts: Record<string, number>; days: number; results: Record<string, Result> };
+type PostCache = { count: number | null; comments: Comment[]; results: Record<string, Result> };
+
+/** Reads an NDJSON stream line by line. */
+async function readStream(url: string, body: unknown, onLine: (o: any) => void) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.status === 401) { window.location.href = "/?error=" + encodeURIComponent("Please log in again"); return; }
+  if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (line) onLine(JSON.parse(line));
+    }
+  }
+}
 type Category = "Enquiry" | "Positive" | "Negative" | "Unclassified";
 type Result = { category: Category; negative_type: string | null; needs_review: boolean; reason: string; label?: string };
 type Filter = "All" | "Enquiry" | "Positive" | "Negative" | "Review";
@@ -46,9 +80,9 @@ const CHUNK = 100;
 type HideResult = { id: string; ok: boolean; verified: boolean; hidden: boolean; error?: string };
 const BATCH = 50;
 
-export default function CommentsPanel({ target, inbox, headerExtra }: { target?: Target; inbox?: InboxSpec; headerExtra?: ReactNode }) {
+export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 }: { target?: Target; inbox?: InboxSpec; headerExtra?: ReactNode; refresh?: number }) {
   const loadKey = inbox?.key || target?.key || "";
-  const [inboxMeta, setInboxMeta] = useState<Omit<InboxData, "comments"> | null>(null);
+  const [sync, setSync] = useState<Sync>({ phase: "loading" });
   const toast = useToast();
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [results, setResults] = useState<Record<string, Result>>({});
@@ -71,33 +105,168 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
   const [hideAllRun, setHideAllRun] = useState<{ done: number; total: number } | null>(null);
   const [hideAllResult, setHideAllResult] = useState<{ hidden: string[]; failed: HideResult[] } | null>(null);
 
-  async function categorise(list: Comment[]) {
-    const todo = list.filter((c) => !c.isBrand && c.text.trim());
-    setProgress({ done: 0, total: todo.length });
-    for (let i = 0; i < todo.length; i += CHUNK) {
-      const chunk = todo.slice(i, i + CHUNK);
-      try {
-        const d = await api<{ results: Record<string, Result> }>("/api/classify", {
-          method: "POST",
-          body: JSON.stringify({ caption: target?.caption || "", comments: chunk.map((c) => ({ id: c.id, text: c.text, parentText: c.parentText, caption: c.src?.caption })) }),
-        });
-        setResults((r) => ({ ...r, ...d.results }));
-      } catch (e: any) {
-        toast({ kind: "err", msg: `Couldn't categorise some comments: ${e.message}` });
+  // Categorising runs in the background as comments arrive; results already cached are skipped.
+  const resultsRef = useRef<Record<string, Result>>({});
+  const commentsRef = useRef<Comment[] | null>(null);
+  useEffect(() => { resultsRef.current = results; }, [results]);
+  useEffect(() => { commentsRef.current = comments; }, [comments]);
+  const queue = useRef<{ total: number; done: number; running: Promise<void> }>({ total: 0, done: 0, running: Promise.resolve() });
+
+  function categorise(list: Comment[]) {
+    const todo = list.filter((c) => !c.isBrand && c.text.trim() && !resultsRef.current[c.id]);
+    if (!todo.length) return queue.current.running;
+    const q = queue.current;
+    q.total += todo.length;
+    setProgress({ done: q.done, total: q.total });
+    q.running = q.running.then(async () => {
+      for (let i = 0; i < todo.length; i += CHUNK) {
+        const chunk = todo.slice(i, i + CHUNK);
+        try {
+          const d = await api<{ results: Record<string, Result> }>("/api/classify", {
+            method: "POST",
+            body: JSON.stringify({ caption: target?.caption || "", comments: chunk.map((c) => ({ id: c.id, text: c.text, parentText: c.parentText, caption: c.src?.caption })) }),
+          });
+          resultsRef.current = { ...resultsRef.current, ...d.results };
+          setResults((r) => ({ ...r, ...d.results }));
+        } catch (e: any) {
+          toast({ kind: "err", msg: `Couldn't categorise some comments: ${e.message}` });
+        }
+        q.done += chunk.length;
+        setProgress({ done: q.done, total: q.total });
       }
-      setProgress({ done: Math.min(i + CHUNK, todo.length), total: todo.length });
-    }
-    setProgress(null);
+      if (q.done >= q.total) { q.done = 0; q.total = 0; setProgress(null); persistSoon(); }
+    });
+    return q.running;
   }
 
+  // ---------- Caching ----------
+  const byObj = useRef<Record<string, Comment[]>>({});
+  const objCounts = useRef<Record<string, number>>({});
+  const cachedDays = useRef(0);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cacheKey = inbox ? inbox.cacheKey : target ? `obj:${target.platform}:${target.objectId}` : "";
+
+  /** Saves what's on screen (comments, hidden state, categories) to the browser cache, debounced. */
+  function persistSoon() {
+    clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      const list = commentsRef.current;
+      if (!list || !cacheKey) return;
+      const results = Object.fromEntries(list.filter((c) => resultsRef.current[c.id]).map((c) => [c.id, resultsRef.current[c.id]]));
+      if (inbox) {
+        const grouped: Record<string, Comment[]> = {};
+        for (const k of Object.keys(byObj.current)) grouped[k] = [];
+        for (const c of list) if (c.src) (grouped[c.src.objectId] ||= []).push(c);
+        cacheSet(cacheKey, { byObj: grouped, counts: objCounts.current, days: cachedDays.current, results } satisfies InboxCache);
+      } else {
+        cacheSet(cacheKey, { count: target?.count ?? null, comments: list, results } satisfies PostCache);
+      }
+    }, 600);
+  }
+
+  const flat = () => Object.values(byObj.current).flat().sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+
+  async function runInbox(full: boolean, first: boolean) {
+    const spec = inbox!;
+    let hadCache = !!commentsRef.current;
+    if (first) {
+      const c = await cacheGet<InboxCache>(spec.cacheKey);
+      if (c) {
+        byObj.current = c.value.byObj; objCounts.current = c.value.counts; cachedDays.current = c.value.days;
+        resultsRef.current = c.value.results; setResults(c.value.results);
+        setComments(flat());
+        hadCache = true;
+        setSync({ phase: "checking", cachedAt: c.at });
+      }
+    }
+    if (!first || !hadCache) setSync((s) => ({ ...s, phase: hadCache ? "checking" : "loading" }));
+    try {
+      const { targets } = await api<{ targets: InboxTarget[] }>(spec.targetsUrl);
+      const byId = new Map(targets.map((t) => [t.objectId, t]));
+      for (const k of Object.keys(byObj.current)) if (!byId.has(k)) delete byObj.current[k];
+      const needLonger = cachedDays.current < spec.days;
+      const changed = targets.filter((t) => full || needLonger || objCounts.current[t.objectId] !== t.count || !byObj.current[t.objectId]);
+      const base = { checked: targets.length, checkedAt: Date.now() };
+      if (!changed.length) {
+        setComments(flat());
+        setSync((s) => ({ ...s, ...base, phase: "ready", changed: 0, withNew: Object.values(byObj.current).filter((l) => l.length).length }));
+        categorise(flat());
+        spec.onFetched?.();
+        persistSoon();
+        return;
+      }
+      let loaded = 0, failed = 0, skipped = 0;
+      setSync((s) => ({ ...s, ...base, phase: hadCache ? "updating" : "loading", total: changed.length, loaded: 0 }));
+      if (!hadCache) setComments([]);
+      await readStream("/api/inbox/comments", { targets: changed.map(({ count, ...t }) => t), days: spec.days }, (m) => {
+        if (m.type === "comments") {
+          const t = byId.get(m.objectId)!;
+          const { count, ...src } = t;
+          const fresh: Comment[] = m.comments.map((c: Comment) => ({ ...c, src }));
+          byObj.current[m.objectId] = fresh;
+          objCounts.current[m.objectId] = count;
+          loaded++;
+          setComments(flat());
+          categorise(fresh);
+        } else if (m.type === "failed") { failed++; loaded++; }
+        else if (m.type === "skipped") { skipped++; loaded++; }
+        if (m.type !== "done") setSync((s) => ({ ...s, loaded, failed, skipped }));
+      });
+      cachedDays.current = full || needLonger ? spec.days : Math.min(cachedDays.current, spec.days);
+      setSync((s) => ({ ...s, phase: "ready", changed: changed.length - failed - skipped, failed, skipped, checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length }));
+      spec.onFetched?.();
+      persistSoon();
+    } catch (e: any) {
+      if (commentsRef.current) {
+        setSync((s) => ({ ...s, phase: "error", error: e.message }));
+        toast({ kind: "err", msg: `Couldn't check for new comments, showing saved ones: ${e.message}` });
+      } else setLoadError(e.message);
+    }
+  }
+
+  async function runTarget(full: boolean, first: boolean) {
+    const t = target!;
+    let hadCache = false;
+    if (first && !full) {
+      const c = await cacheGet<PostCache>(cacheKey);
+      if (c) {
+        hadCache = true;
+        resultsRef.current = c.value.results; setResults(c.value.results);
+        setComments(c.value.comments);
+        const same = t.count != null && c.value.count === t.count;
+        setSync({ phase: same ? "ready" : "checking", cachedAt: c.at, checkedAt: same ? c.at : undefined, changed: 0 });
+        if (same) { categorise(c.value.comments); return; }
+      }
+    }
+    setSync((s) => ({ ...s, phase: hadCache || commentsRef.current ? "checking" : "loading" }));
+    try {
+      const d = await api<{ comments: Comment[] }>(`/api/comments?${new URLSearchParams({ platform: t.platform, objectId: t.objectId, pageId: t.pageId, brandUsername: t.brandUsername })}`);
+      setComments(d.comments);
+      commentsRef.current = d.comments;
+      setSync({ phase: "ready", checkedAt: Date.now(), changed: 1 });
+      categorise(d.comments);
+      persistSoon();
+    } catch (e: any) {
+      if (commentsRef.current) toast({ kind: "err", msg: `Couldn't refresh, showing saved comments: ${e.message}` });
+      else setLoadError(e.message);
+    }
+  }
+
+  // First load: show the cached copy straight away, then fetch only what changed.
   useEffect(() => {
-    setComments(null); setResults({}); setLoadError(""); setSelected(new Set()); setInboxMeta(null);
-    const load: Promise<{ comments: Comment[] }> = inbox
-      ? inbox.load().then((d) => { const { comments: _c, ...meta } = d; setInboxMeta(meta); return d; })
-      : api<{ comments: Comment[] }>(`/api/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId, brandUsername: target!.brandUsername })}`);
-    load.then((d) => { setComments(d.comments); return categorise(d.comments); }).catch((e) => setLoadError(e.message));
+    (inbox ? runInbox(false, true) : runTarget(false, true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadKey]);
+
+  // Refresh button: refetch everything, but keep showing the current comments meanwhile.
+  const firstRefresh = useRef(inbox ? inbox.refresh : refresh);
+  useEffect(() => {
+    const r = inbox ? inbox.refresh : refresh;
+    if (r === firstRefresh.current) return;
+    firstRefresh.current = r;
+    (inbox ? runInbox(true, false) : runTarget(true, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inbox?.refresh, refresh]);
 
   /** Where a comment lives: its own source in the inbox, or the open post. */
   const whereIs = (c: Comment) => c.src
@@ -131,6 +300,7 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
         all.push(...d.results);
         const byId = new Map(d.results.map((r) => [r.id, r]));
         setComments((list) => list?.map((x) => (byId.has(x.id) ? { ...x, hidden: byId.get(x.id)!.hidden } : x)) || null);
+        persistSoon();
         setVerified((v) => {
           const n = new Set(v);
           for (const r of d.results) (r.verified && hide ? n.add(r.id) : n.delete(r.id));
@@ -203,6 +373,8 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
     const before = Object.fromEntries(ids.map((id) => [id, results[id]]));
     const next = resultFor(label);
     setResults((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, next])) }));
+    resultsRef.current = { ...resultsRef.current, ...Object.fromEntries(ids.map((id) => [id, next])) };
+    persistSoon();
 
     const name = CHOICES.find(([v]) => v === label)?.[1] || label;
     const newCat = next.category;
@@ -228,7 +400,10 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
     }
   }
 
-  const customer = useMemo(() => (comments || []).filter((c) => !c.isBrand), [comments]);
+  // Comments inside the chosen time window (the cache may hold a longer window).
+  const sinceMs = inbox ? Date.now() - inbox.days * 864e5 : 0;
+  const inWin = (c: Comment) => !sinceMs || Date.parse(c.time) >= sinceMs;
+  const customer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, inbox?.days]);
 
   const counts = useMemo(() => {
     const c = { All: customer.length, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
@@ -283,6 +458,7 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = (comments || []).filter((c) => {
+      if (!inWin(c)) return false;
       if (c.isBrand) return showBrand && filter === "All" && !q;
       if (q && !c.text.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
       if (filter === "All") return true;
@@ -300,7 +476,7 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
       for (const r of list) if (r.parentId === t.id) out.push(r);
     }
     return out;
-  }, [comments, results, filter, query, sort, showBrand, moving]);
+  }, [comments, results, filter, query, sort, showBrand, moving, inbox?.days]);
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
@@ -326,13 +502,7 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
             <h2>All comments · {windowLabel}</h2>
             <div className="caption">{inbox.scope}</div>
             <div className="hero-meta">
-              {inboxMeta ? (
-                <span>
-                  Checked {inboxMeta.scanned} {inboxMeta.scanned === 1 ? (inbox.noun || "post") : `${inbox.noun || "post"}s`} · new comments on {inboxMeta.withNew}
-                  {inboxMeta.skipped > 0 && ` · ${inboxMeta.skipped} skipped to stay fast`}
-                  {inboxMeta.failed > 0 && ` · ${inboxMeta.failed} couldn't be read`}
-                </span>
-              ) : <span>Checking every {inbox.noun || "post"} for new comments…</span>}
+              <SyncLine sync={sync} noun={inbox.noun || "post"} />
             </div>
           </div>
         </div>
@@ -350,6 +520,7 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
           <div className="hero-meta">
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target!.platform === "instagram" ? "Instagram" : "Facebook"}{target!.kind === "ad" ? " ad" : " post"}</span>
             {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
+            <SyncLine sync={sync} noun="post" single />
           </div>
           {headerExtra && <div className="hero-switch">{headerExtra}</div>}
         </div>
@@ -371,6 +542,9 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
         })}
       </div>
 
+      {inbox && (sync.phase === "loading" || sync.phase === "updating") && !!sync.total && (
+        <div className="progress" aria-label="Loading comments"><i style={{ width: `${(100 * (sync.loaded || 0)) / sync.total}%` }} /></div>
+      )}
       {progress && <div className="progress" aria-label="Categorising"><i style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 100}%` }} /></div>}
 
       {insight && (
@@ -425,8 +599,8 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
       )}
 
       {loadError && <div className="callout danger"><div className="callout-main"><div className="callout-tag">Couldn&apos;t load comments</div><div className="callout-body">{loadError}</div></div></div>}
-      {!comments && !loadError && <CommentSkeleton />}
-      {comments && comments.length === 0 && (inbox
+      {(!comments || (comments.length === 0 && sync.phase === "loading")) && !loadError && <CommentSkeleton />}
+      {comments && comments.length === 0 && sync.phase !== "loading" && (inbox
         ? <div className="card"><Empty icon={<Inbox />} title={`No new comments in the ${windowLabel}`}>You&apos;re all caught up. Try a longer window if you expected more.</Empty></div>
         : <div className="card"><Empty icon={<MessageCircle />} title="No comments yet">When people comment on this {target?.kind === "ad" ? "ad" : "post"}, they&apos;ll appear here.</Empty></div>)}
       {comments && comments.length > 0 && visible.length === 0 && (
@@ -558,4 +732,20 @@ export default function CommentsPanel({ target, inbox, headerExtra }: { target?:
       </div>
     </div>
   );
+}
+
+/** One line saying how fresh the data is: saved copy, checking, updating, or up to date. */
+function SyncLine({ sync, noun, single }: { sync: Sync; noun: string; single?: boolean }) {
+  const plural = (n: number) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const time = sync.checkedAt ? new Date(sync.checkedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase() : "";
+  let text = "";
+  if (sync.phase === "loading") text = single ? "Loading comments…" : sync.total ? `Loading comments from ${sync.loaded || 0} of ${plural(sync.total)}…` : `Checking every ${noun} for new comments…`;
+  else if (sync.phase === "checking") text = `Showing saved comments from ${ago(sync.cachedAt || Date.now())} · checking for new ones…`;
+  else if (sync.phase === "updating") text = `Updating ${sync.loaded || 0} of ${plural(sync.total || 0)} with new comments…`;
+  else if (sync.phase === "error") text = `Showing saved comments · couldn't check for new ones`;
+  else if (single) text = sync.changed ? `Up to date · fetched ${time}` : `Up to date · saved ${ago(sync.cachedAt || Date.now())}, no new comments`;
+  else text = `${sync.changed ? `Updated ${plural(sync.changed)} with new comments` : "Up to date, nothing new"} · checked ${plural(sync.checked || 0)} at ${time}`
+    + (sync.skipped ? ` · ${sync.skipped} skipped to stay fast` : "") + (sync.failed ? ` · ${sync.failed} couldn't be read` : "");
+  const live = sync.phase === "loading" || sync.phase === "checking" || sync.phase === "updating";
+  return <span className={`sync${live ? " live" : ""}${sync.phase === "error" ? " err" : ""}`}>{text}</span>;
 }
