@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 
@@ -8,10 +8,16 @@ export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
   brandUsername: string; title: string; caption: string; permalink: string; image?: string; kind?: "post" | "ad";
 };
+export type Src = {
+  platform: "instagram" | "facebook"; pageId: string; objectId: string; brandUsername: string;
+  caption: string; image?: string | null; permalink?: string | null; kind: "post" | "ad"; label: string; adId?: string;
+};
 type Comment = {
   id: string; text: string; time: string; author: string; hidden: boolean; canHide: boolean;
-  parentId: string | null; parentText: string | null; isBrand: boolean;
+  parentId: string | null; parentText: string | null; isBrand: boolean; src?: Src;
 };
+export type InboxData = { comments: Comment[]; scanned: number; withNew: number; skipped: number; failed: number; since: string };
+export type InboxSpec = { key: string; days: number; scope: string; noun?: "post" | "ad"; load: () => Promise<InboxData>; onOpen?: (src: Src) => void };
 type Category = "Enquiry" | "Positive" | "Negative" | "Unclassified";
 type Result = { category: Category; negative_type: string | null; needs_review: boolean; reason: string; label?: string };
 type Filter = "All" | "Enquiry" | "Positive" | "Negative" | "Review";
@@ -40,7 +46,9 @@ const CHUNK = 100;
 type HideResult = { id: string; ok: boolean; verified: boolean; hidden: boolean; error?: string };
 const BATCH = 50;
 
-export default function CommentsPanel({ target, headerExtra }: { target: Target; headerExtra?: ReactNode }) {
+export default function CommentsPanel({ target, inbox, headerExtra }: { target?: Target; inbox?: InboxSpec; headerExtra?: ReactNode }) {
+  const loadKey = inbox?.key || target?.key || "";
+  const [inboxMeta, setInboxMeta] = useState<Omit<InboxData, "comments"> | null>(null);
   const toast = useToast();
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [results, setResults] = useState<Record<string, Result>>({});
@@ -71,7 +79,7 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
       try {
         const d = await api<{ results: Record<string, Result> }>("/api/classify", {
           method: "POST",
-          body: JSON.stringify({ caption: target.caption, comments: chunk.map((c) => ({ id: c.id, text: c.text, parentText: c.parentText })) }),
+          body: JSON.stringify({ caption: target?.caption || "", comments: chunk.map((c) => ({ id: c.id, text: c.text, parentText: c.parentText, caption: c.src?.caption })) }),
         });
         setResults((r) => ({ ...r, ...d.results }));
       } catch (e: any) {
@@ -83,23 +91,42 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
   }
 
   useEffect(() => {
-    const qs = new URLSearchParams({ platform: target.platform, objectId: target.objectId, pageId: target.pageId, brandUsername: target.brandUsername });
-    api<{ comments: Comment[] }>(`/api/comments?${qs}`)
-      .then((d) => { setComments(d.comments); return categorise(d.comments); })
-      .catch((e) => setLoadError(e.message));
+    setComments(null); setResults({}); setLoadError(""); setSelected(new Set()); setInboxMeta(null);
+    const load: Promise<{ comments: Comment[] }> = inbox
+      ? inbox.load().then((d) => { const { comments: _c, ...meta } = d; setInboxMeta(meta); return d; })
+      : api<{ comments: Comment[] }>(`/api/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId, brandUsername: target!.brandUsername })}`);
+    load.then((d) => { setComments(d.comments); return categorise(d.comments); }).catch((e) => setLoadError(e.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target.key]);
+  }, [loadKey]);
+
+  /** Where a comment lives: its own source in the inbox, or the open post. */
+  const whereIs = (c: Comment) => c.src
+    ? { platform: c.src.platform, pageId: c.src.pageId || c.id.split("_")[0] }
+    : { platform: target!.platform, pageId: target!.pageId || c.id.split("_")[0] };
 
   /** Hides or unhides comments in batches of 50. Meta confirms each one by reading it back. */
   async function setHidden(ids: string[], hide: boolean, onProgress?: (done: number) => void): Promise<HideResult[]> {
     const all: HideResult[] = [];
     setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((i) => [i, true])) }));
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const chunk = ids.slice(i, i + BATCH);
+    // Group by platform and Page, because each group needs its own access token on the server.
+    const groups = new Map<string, { platform: string; pageId: string; ids: string[] }>();
+    for (const id of ids) {
+      const c = comments?.find((x) => x.id === id);
+      if (!c) continue;
+      const w = whereIs(c);
+      const k = w.platform === "instagram" ? "instagram" : `facebook:${w.pageId}`;
+      if (!groups.has(k)) groups.set(k, { ...w, ids: [] });
+      groups.get(k)!.ids.push(id);
+    }
+    const chunks: { platform: string; pageId: string; ids: string[] }[] = [];
+    for (const g of groups.values()) for (let i = 0; i < g.ids.length; i += BATCH) chunks.push({ ...g, ids: g.ids.slice(i, i + BATCH) });
+    let done = 0;
+    for (const ch of chunks) {
+      const chunk = ch.ids;
       try {
         const d = await api<{ results: HideResult[] }>("/api/hide", {
           method: "POST",
-          body: JSON.stringify({ platform: target.platform, pageId: target.pageId || chunk[0].split("_")[0], hide, commentIds: chunk }),
+          body: JSON.stringify({ platform: ch.platform, pageId: ch.pageId, hide, commentIds: chunk }),
         });
         all.push(...d.results);
         const byId = new Map(d.results.map((r) => [r.id, r]));
@@ -112,7 +139,8 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
       } catch (e: any) {
         all.push(...chunk.map((id) => ({ id, ok: false, verified: false, hidden: !hide, error: e.message })));
       }
-      onProgress?.(Math.min(i + BATCH, ids.length));
+      done += chunk.length;
+      onProgress?.(done);
     }
     setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((i) => [i, false])) }));
     return all;
@@ -247,7 +275,7 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
       button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
     };
     return {
-      tone: "info", tag: "Info", title: "Nothing needs action on this post",
+      tone: "info", tag: "Info", title: inbox ? `Nothing needs action in the ${inbox.days === 1 ? "last 24 hours" : `last ${inbox.days} days`}` : "Nothing needs action on this post",
       body: "No complaints, spam or unanswered enquiries.", action: "", button: null,
     };
   }, [customer, results, replied, progress]);
@@ -286,27 +314,47 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
 
-  const PlatformIcon = target.platform === "instagram" ? Instagram : Facebook;
+  const PlatformIcon = target?.platform === "instagram" ? Instagram : Facebook;
+  const windowLabel = inbox ? (inbox.days === 1 ? "last 24 hours" : `last ${inbox.days} days`) : "";
 
   return (
     <div>
+      {inbox ? (
+        <div className="card post-hero inbox-hero">
+          <span className="thumb inbox-icon"><Inbox /></span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h2>All comments · {windowLabel}</h2>
+            <div className="caption">{inbox.scope}</div>
+            <div className="hero-meta">
+              {inboxMeta ? (
+                <span>
+                  Checked {inboxMeta.scanned} {inboxMeta.scanned === 1 ? (inbox.noun || "post") : `${inbox.noun || "post"}s`} · new comments on {inboxMeta.withNew}
+                  {inboxMeta.skipped > 0 && ` · ${inboxMeta.skipped} skipped to stay fast`}
+                  {inboxMeta.failed > 0 && ` · ${inboxMeta.failed} couldn't be read`}
+                </span>
+              ) : <span>Checking every {inbox.noun || "post"} for new comments…</span>}
+            </div>
+          </div>
+        </div>
+      ) : target ? (
       <div className="card post-hero">
-        {target.image ? <img className="thumb" src={target.image} alt="" /> : <span className="thumb">{target.kind === "ad" ? <Megaphone /> : <ImageIcon />}</span>}
+        {target!.image ? <img className="thumb" src={target!.image} alt="" /> : <span className="thumb">{target!.kind === "ad" ? <Megaphone /> : <ImageIcon />}</span>}
         <div style={{ minWidth: 0, flex: 1 }}>
-          <h2>{target.title}</h2>
-          {target.caption && (
+          <h2>{target!.title}</h2>
+          {target!.caption && (
             <>
-              <div className={`caption${captionOpen ? " open" : ""}`}>{target.caption}</div>
-              {target.caption.length > 140 && <button className="linkish" onClick={() => setCaptionOpen((o) => !o)}>{captionOpen ? "Show less" : "Show more"}</button>}
+              <div className={`caption${captionOpen ? " open" : ""}`}>{target!.caption}</div>
+              {target!.caption.length > 140 && <button className="linkish" onClick={() => setCaptionOpen((o) => !o)}>{captionOpen ? "Show less" : "Show more"}</button>}
             </>
           )}
           <div className="hero-meta">
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target.platform === "instagram" ? "Instagram" : "Facebook"}{target.kind === "ad" ? " ad" : " post"}</span>
-            {target.permalink && <a href={target.permalink} target="_blank" rel="noreferrer">Open on {target.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target!.platform === "instagram" ? "Instagram" : "Facebook"}{target!.kind === "ad" ? " ad" : " post"}</span>
+            {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
           </div>
           {headerExtra && <div className="hero-switch">{headerExtra}</div>}
         </div>
       </div>
+      ) : null}
 
       <div className="kpis" role="group" aria-label="Filter by category">
         {KPI.map((k) => {
@@ -378,7 +426,9 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
 
       {loadError && <div className="callout danger"><div className="callout-main"><div className="callout-tag">Couldn&apos;t load comments</div><div className="callout-body">{loadError}</div></div></div>}
       {!comments && !loadError && <CommentSkeleton />}
-      {comments && comments.length === 0 && <div className="card"><Empty icon={<MessageCircle />} title="No comments yet">When people comment on this {target.kind === "ad" ? "ad" : "post"}, they&apos;ll appear here.</Empty></div>}
+      {comments && comments.length === 0 && (inbox
+        ? <div className="card"><Empty icon={<Inbox />} title={`No new comments in the ${windowLabel}`}>You&apos;re all caught up. Try a longer window if you expected more.</Empty></div>
+        : <div className="card"><Empty icon={<MessageCircle />} title="No comments yet">When people comment on this {target?.kind === "ad" ? "ad" : "post"}, they&apos;ll appear here.</Empty></div>)}
       {comments && comments.length > 0 && visible.length === 0 && (
         <div className="card"><Empty small icon={<Search />} title="Nothing matches">Try another filter or search.</Empty></div>
       )}
@@ -465,6 +515,14 @@ export default function CommentsPanel({ target, headerExtra }: { target: Target;
                   {moving[c.id] && <span className="moved-note"><ArrowRight />Moved to {moving[c.id]}</span>}
                   {!c.isBrand && replied.has(c.id) && <span className="tag tag-fixed"><CornerDownRight />Brand replied</span>}
                 </div>
+                {c.src && (
+                  <button className="c-src" onClick={() => inbox?.onOpen?.(c.src!)} title="Open this post with all its comments">
+                    {c.src.image ? <img src={c.src.image} alt="" loading="lazy" /> : <span className="c-src-ph">{c.src.kind === "ad" ? <Megaphone /> : <ImageIcon />}</span>}
+                    {c.src.platform === "instagram" ? <Instagram /> : <Facebook />}
+                    <span className="c-src-text">{c.src.kind === "ad" ? "Ad · " : ""}{c.src.caption || c.src.label}</span>
+                    <ChevronRight />
+                  </button>
+                )}
                 {c.parentId && c.parentText && <div className="c-parent">Replying to: {c.parentText}</div>}
                 <p className="c-text">{c.text || <em style={{ color: "var(--muted)" }}>Sticker or image</em>}</p>
                 {!c.isBrand && (
