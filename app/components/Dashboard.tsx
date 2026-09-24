@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList } from "lucide-react";
 import { api, fmtDate } from "./api";
 import Shell, { type View } from "./Shell";
-import CommentsPanel, { type Target, type InboxData, type Src } from "./CommentsPanel";
+import CommentsPanel, { type Target, type Src } from "./CommentsPanel";
+import { cacheGet, cacheSet, setCacheNamespace } from "./cache";
 import { ToastProvider, SelectPill, Empty, ListSkeleton } from "./ui";
 
 type PageAcc = { id: string; name: string; instagram: { id: string; username: string } | null };
@@ -19,7 +20,8 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const timeNow = () => new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase();
 const RECONNECT = "/api/auth/login?reconnect=1";
 
-export default function Dashboard({ userName }: { userName: string }) {
+export default function Dashboard({ userName, userId }: { userName: string; userId?: string }) {
+  setCacheNamespace(userId || "");
   return (
     <ToastProvider>
       <App userName={userName} />
@@ -65,6 +67,7 @@ function App({ userName }: { userName: string }) {
   const [adsMode, setAdsMode] = useState<"inbox" | "list">("inbox");
   const [days, setDays] = useState(7);
   const [inboxNonce, setInboxNonce] = useState(0);
+  const [panelNonce, setPanelNonce] = useState(0);
   const pendingTarget = useRef<Target | null>(null);
 
   useEffect(() => {
@@ -95,30 +98,47 @@ function App({ userName }: { userName: string }) {
 
   const page = useMemo(() => pages?.find((p) => p.id === pageId), [pages, pageId]);
 
+  /** Loads posts. Shows the cached list straight away (if any), then replaces it with Meta's current list. */
   const loadPosts = useCallback(async (after?: string) => {
     if (!page) return;
     const accountId = platform === "instagram" ? page.instagram?.id : page.id;
     if (!accountId) return;
     setPostsBusy(true); setPostsError("");
-    if (!after) setPosts(null);
+    const key = `posts:${platform}:${accountId}:${since}:${until}`;
+    let shown = false;
+    const pickTarget = (list: Post[]) => {
+      if (view !== "posts") return;
+      if (pendingTarget.current) {
+        setTarget(pendingTarget.current);
+        pendingTarget.current = null;
+        return;
+      }
+      setTarget((cur) => {
+        // Keep the open post if it's still in the list, with its latest comment count.
+        const still = cur && list.find((p) => `${platform}:${p.id}` === cur.key);
+        if (still) {
+          // New comments on the open post since it was cached: refresh it.
+          if (cur!.count !== undefined && still.comments !== cur!.count) setPanelNonce((n) => n + 1);
+          return { ...cur!, count: still.comments };
+        }
+        const first = list.find((p) => p.comments > 0) || list[0];
+        return first ? postTarget(first, platform, page) : null;
+      });
+    };
+    if (!after) {
+      const c = await cacheGet<{ posts: Post[]; next: string | null }>(key);
+      if (c) { setPosts(c.value.posts); setPostsNext(c.value.next); pickTarget(c.value.posts); shown = true; }
+      else setPosts(null);
+    }
     try {
       const qs = new URLSearchParams({ platform, accountId, since, until, ...(after ? { after } : {}) });
       const d = await api<{ posts: Post[]; next: string | null }>(`/api/posts?${qs}`);
       setPosts((prev) => (after && prev ? [...prev, ...d.posts] : d.posts));
       setPostsNext(d.next);
       setFetchedAt(timeNow());
-      if (!after && view === "posts") {
-        if (pendingTarget.current) {
-          setTarget(pendingTarget.current);
-          pendingTarget.current = null;
-        } else {
-          const first = d.posts.find((p) => p.comments > 0) || d.posts[0];
-          setTarget(first ? postTarget(first, platform, page) : null);
-        }
-      }
+      if (!after) { cacheSet(key, d); pickTarget(d.posts); }
     } catch (e: any) {
-      setPostsError(e.message);
-      setPosts([]);
+      if (!shown) { setPostsError(e.message); setPosts([]); }
     } finally { setPostsBusy(false); }
   }, [page, platform, since, until, view]);
 
@@ -130,19 +150,28 @@ function App({ userName }: { userName: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, platform, since, until, view, pages, postsMode]);
 
-  const loadAds = useCallback(async (after?: string) => {
+  /** Loads ads. The ad list is slow to build (one call per ad), so a cached copy under 5 minutes old is used as is. */
+  const loadAds = useCallback(async (after?: string, force = false) => {
     if (!adAccountId) return;
     setAdsBusy(true); setAdsError("");
-    if (!after) { setAds(null); setAdId(""); setTarget(null); }
+    const key = `ads:${adAccountId}:${adStatus}`;
+    let shown = false;
+    if (!after) {
+      const c = await cacheGet<{ ads: Ad[]; next: string | null }>(key);
+      if (c && !force) {
+        setAds(c.value.ads); setAdsNext(c.value.next); shown = true;
+        if (Date.now() - c.at < 5 * 60 * 1000) { setAdsFetchedAt(new Date(c.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase()); setAdsBusy(false); return; }
+      } else if (!c) { setAds(null); setAdId(""); setTarget(null); }
+    }
     try {
       const qs = new URLSearchParams({ adAccountId, status: adStatus, ...(after ? { after } : {}) });
       const d = await api<{ ads: Ad[]; next: string | null }>(`/api/ads?${qs}`);
       setAds((prev) => (after && prev ? [...prev, ...d.ads] : d.ads));
       setAdsNext(d.next);
       setAdsFetchedAt(timeNow());
+      if (!after) cacheSet(key, d);
     } catch (e: any) {
-      setAdsError(e.message);
-      setAds([]);
+      if (!shown) { setAdsError(e.message); setAds([]); }
     } finally { setAdsBusy(false); }
   }, [adAccountId, adStatus]);
 
@@ -164,13 +193,13 @@ function App({ userName }: { userName: string }) {
       setTarget({
         key: `instagram:${ad.instagram.mediaId}`, platform: "instagram", objectId: ad.instagram.mediaId, pageId: "",
         brandUsername: ad.instagram.brandUsername, title, caption: ad.instagram.caption || ad.text || ad.name, permalink: ad.instagram.permalink || "",
-        image: ad.image || ad.instagram.image, kind: "ad",
+        image: ad.image || ad.instagram.image, kind: "ad", count: ad.instagram.comments ?? undefined,
       });
     } else if (which === "facebook" && ad.facebook) {
       setTarget({
         key: `facebook:${ad.facebook.postId}`, platform: "facebook", objectId: ad.facebook.postId, pageId: ad.facebook.pageId,
         brandUsername: "", title, caption: ad.facebook.caption || ad.text || ad.name, permalink: ad.facebook.permalink || "",
-        image: ad.image || ad.facebook.image, kind: "ad",
+        image: ad.image || ad.facebook.image, kind: "ad", count: ad.facebook.comments ?? undefined,
       });
     }
   }
@@ -201,9 +230,10 @@ function App({ userName }: { userName: string }) {
 
   /** Inbox specs: every comment from the last N days, for the brand's posts or the ad account's ads. */
   const postsInbox = page ? {
-    key: `inbox:posts:${page.id}:${days}:${inboxNonce}`, days,
+    key: `inbox:posts:${page.id}:${days}`, cacheKey: `inbox:posts:${page.id}`, days, refresh: inboxNonce,
     scope: `${page.name} · ${page.instagram ? "Instagram and Facebook" : "Facebook"} posts from the last 60 days`,
-    load: () => api<InboxData>(`/api/inbox?${new URLSearchParams({ source: "posts", pageId: page.id, days: String(days) })}`).then((d) => { setFetchedAt(timeNow()); return d; }),
+    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "posts", pageId: page.id })}`,
+    onFetched: () => setFetchedAt(timeNow()),
     onOpen: (src: Src) => {
       // Jump to this post in the "By post" view.
       pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: page.id,
@@ -214,9 +244,10 @@ function App({ userName }: { userName: string }) {
   } : undefined;
   const adAccountName = adAccounts?.find((a) => a.id === adAccountId)?.name || "";
   const adsInbox = adAccountId ? {
-    key: `inbox:ads:${adAccountId}:${adStatus}:${days}:${inboxNonce}`, days, noun: "ad" as const,
+    key: `inbox:ads:${adAccountId}:${adStatus}:${days}`, cacheKey: `inbox:ads:${adAccountId}:${adStatus}`, days, noun: "ad" as const, refresh: inboxNonce,
     scope: `${adAccountName} · ${adStatus === "active" ? "active" : "active and paused"} ads on Instagram and Facebook`,
-    load: () => api<InboxData>(`/api/inbox?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus, days: String(days) })}`).then((d) => { setAdsFetchedAt(timeNow()); return d; }),
+    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus })}`,
+    onFetched: () => setAdsFetchedAt(timeNow()),
     onOpen: (src: Src) => {
       pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: src.pageId,
         brandUsername: src.brandUsername, title: src.label, caption: src.caption, permalink: src.permalink || "", image: src.image || undefined, kind: "ad", ...( { adId: src.adId } as any) };
@@ -273,7 +304,7 @@ function App({ userName }: { userName: string }) {
                   <input type="date" value={until} min={since} max={iso(new Date())} onChange={(e) => e.target.value && setUntil(e.target.value)} aria-label="To" />
                 </label>
               )}
-              <button className="btn btn-icon" onClick={() => (postsMode === "inbox" ? setInboxNonce((n) => n + 1) : loadPosts())} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
+              <button className="btn btn-icon" onClick={() => { if (postsMode === "inbox") setInboxNonce((n) => n + 1); else { loadPosts(); setPanelNonce((n) => n + 1); } }} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={postsBusy ? "spin" : undefined} />
               </button>
             </div>
@@ -335,7 +366,7 @@ function App({ userName }: { userName: string }) {
               </section>
 
               <section className="detail" aria-label="Comments">
-                {target ? <CommentsPanel key={target.key} target={target} /> : (
+                {target ? <CommentsPanel key={target.key} target={target} refresh={panelNonce} /> : (
                   posts && posts.length > 0 ? (
                     <div className="card"><Empty icon={<MessageCircle />} title="Pick a post">Choose a post on the left to see and moderate its comments.</Empty></div>
                   ) : posts ? null : <div className="card"><Empty icon={<MessageCircle />} title="Loading posts…" /></div>
@@ -367,7 +398,7 @@ function App({ userName }: { userName: string }) {
                   <DaysSeg />
                 </>
               )}
-              <button className="btn btn-icon" onClick={() => (adsMode === "inbox" ? setInboxNonce((n) => n + 1) : loadAds())} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
+              <button className="btn btn-icon" onClick={() => { if (adsMode === "inbox") setInboxNonce((n) => n + 1); else { loadAds(undefined, true); setPanelNonce((n) => n + 1); } }} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={adsBusy ? "spin" : undefined} />
               </button>
             </div>
@@ -442,7 +473,7 @@ function App({ userName }: { userName: string }) {
               </section>
               <section className="detail" aria-label="Comments">
                 {target && currentAd ? (
-                  <CommentsPanel key={target.key} target={target} headerExtra={adPlacements(currentAd).length > 1 ? (
+                  <CommentsPanel key={target.key} target={target} refresh={panelNonce} headerExtra={adPlacements(currentAd).length > 1 ? (
                     <div className="seg sm" role="group" aria-label="Placement">
                       {adPlacements(currentAd).map((p) => (
                         <button key={p.platform} aria-pressed={target.platform === p.platform} onClick={() => openAd(currentAd, p.platform)}>
@@ -493,7 +524,7 @@ function postTarget(p: Post, platform: "instagram" | "facebook", page: PageAcc):
   return {
     key: `${platform}:${p.id}`, platform, objectId: p.id, pageId: page.id,
     brandUsername: page.instagram?.username || "", title: `${p.type} · ${fmtDate(p.time)}`,
-    caption: p.text, permalink: p.permalink, image: p.image, kind: "post",
+    caption: p.text, permalink: p.permalink, image: p.image, kind: "post", count: p.comments,
   };
 }
 
