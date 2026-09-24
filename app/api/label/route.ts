@@ -2,9 +2,9 @@ import { NextRequest } from "next/server";
 import { handle, sameOrigin } from "@/lib/api";
 import { requireToken } from "@/lib/session";
 import { saveCorrection, LABELS, persistent, type Label } from "@/lib/local/corrections";
-import { invalidateModel, classifyLocal } from "@/lib/local";
+import { invalidateModel, toResult } from "@/lib/local";
 
-// Saves a team member's correction. The built-in model retrains with it straight away.
+// Saves a team member's correction. The built-in model retrains with it on the next categorise request.
 export async function POST(req: NextRequest) {
   return handle(async () => {
     await requireToken();
@@ -12,9 +12,9 @@ export async function POST(req: NextRequest) {
     const { text, label } = await req.json();
     if (!text || !LABELS.includes(label)) throw new Error("Missing comment text or invalid label");
     await saveCorrection(String(text), label as Label);
+    // The model retrains on the next categorise request, so this reply is instant.
     invalidateModel();
-    const [result] = await classifyLocal([String(text)]);
-    return { ok: true, persistent, result };
+    return { ok: true, persistent, result: toResult(label, 1, "Corrected by your team") };
   });
 }
 

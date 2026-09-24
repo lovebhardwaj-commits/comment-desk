@@ -96,3 +96,36 @@ export async function pageToken(userToken: string, pageId: string): Promise<stri
   if (!page) throw new GraphError("You don't manage this Facebook Page, or it wasn't selected when you logged in.");
   return page.access_token;
 }
+
+export type BatchRequest = { method: "GET" | "POST"; relative_url: string };
+export type BatchResult = { ok: boolean; body: any; error?: string };
+
+/** Sends up to 50 requests per call using Meta's batch API. Returns one result per request, in order. */
+export async function graphBatch(token: string, requests: BatchRequest[]): Promise<BatchResult[]> {
+  const out: BatchResult[] = [];
+  for (let i = 0; i < requests.length; i += 50) {
+    const chunk = requests.slice(i, i + 50);
+    const body = new URLSearchParams({ batch: JSON.stringify(chunk), include_headers: "false" });
+    const p = proof(token);
+    if (p) body.set("appsecret_proof", p);
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => null);
+    if (!Array.isArray(data)) {
+      const e = data?.error || {};
+      if (e.code === 190) throw new AuthError("Your Facebook login has expired. Please log in again.");
+      throw new GraphError(e.message || `Batch request failed (${res.status})`, e.code);
+    }
+    for (const item of data) {
+      let parsed: any = null;
+      try { parsed = item?.body ? JSON.parse(item.body) : null; } catch {}
+      const ok = item?.code === 200 && !parsed?.error;
+      out.push({ ok, body: parsed, error: ok ? undefined : parsed?.error?.error_user_msg || parsed?.error?.message || `Error ${item?.code ?? "unknown"}` });
+    }
+  }
+  return out;
+}
