@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT, PROMPT_VERSION } from "./prompt";
 import { cacheGet, cacheSet } from "./cache";
+import { classifyLocal } from "./local";
 
 export type Category = "Enquiry" | "Positive" | "Negative";
 export type Result = {
@@ -52,9 +53,16 @@ async function classifyBatch(batch: Input[]): Promise<Record<string, Result>> {
 
 const key = (id: string) => `cls:${PROMPT_VERSION}:${id}`;
 
-/** Classify comments, using cached results where available. Missing or invalid outputs come back as Unclassified. */
+/** Which engine to use: the free built-in model (default), or Claude when CLASSIFIER=claude and an API key is set. */
+export const ENGINE = process.env.CLASSIFIER === "claude" && process.env.ANTHROPIC_API_KEY ? "claude" : "local";
+
+/** Classify comments. Missing or invalid outputs come back as Unclassified. */
 export async function classify(items: Input[]): Promise<Record<string, Result>> {
   const results: Record<string, Result> = {};
+  if (ENGINE === "local") {
+    for (const it of items) results[it.id] = classifyLocal(it.comment);
+    return results;
+  }
   const cached = await cacheGet(items.map((i) => key(i.id)));
   const todo: Input[] = [];
   items.forEach((it, i) => {

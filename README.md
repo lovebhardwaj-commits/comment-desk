@@ -2,9 +2,11 @@
 
 A web app for your team to review comments on merchants' Facebook and Instagram **posts and ads**, sorted into **Enquiry, Positive and Negative**, and hide or unhide them with one click.
 
-Negative comments also carry a type (complaint, criticism, spam, abuse) so you can tell an unhappy customer from a bot before hiding.
+Negative comments also carry a type (complaint, criticism, spam) so you can tell an unhappy customer from a bot before hiding.
 
 Nothing is hidden automatically. The app only hides a comment when someone clicks **Hide**.
+
+**Categorisation is free by default.** The app has a built-in model (in `lib/local/`) that runs on the server with no external service. It handles English, Hindi (Devanagari) and Hinglish, and was trained on comments about many product types (fashion, beauty, electronics, home, food, apps, services). In testing it got about 87–90% of comments right. If you need higher accuracy, you can switch to Claude (paid per comment) with one setting, see below.
 
 ---
 
@@ -36,13 +38,14 @@ In developers.facebook.com, open your existing app:
 | `GRAPH_VERSION` | `v25.0` |
 | `APP_URL` | `https://YOUR-APP.vercel.app` (no trailing slash) |
 | `SESSION_SECRET` | 32+ random characters, e.g. from `openssl rand -base64 32` |
-| `ANTHROPIC_API_KEY` | From console.anthropic.com |
-| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` (cheaper) or `claude-sonnet-5` (stronger) |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Optional but recommended, see below |
+| `CLASSIFIER` | Leave empty for the free built-in model. Set to `claude` to use Claude instead |
+| `ANTHROPIC_API_KEY` | Only needed with `CLASSIFIER=claude`. From console.anthropic.com |
+| `CLAUDE_MODEL` | Only with Claude: `claude-haiku-4-5-20251001` (cheaper) or `claude-sonnet-5` (stronger) |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Optional, only useful with Claude, see below |
 
 3. **Deploy.** Then make sure `APP_URL` and the redirect URI in step 1.2 match the final domain exactly.
 
-**Cache (recommended):** in Vercel, **Storage / Marketplace → Upstash Redis → Create** (free tier is enough), and copy its REST URL and token into the two `UPSTASH_` variables. Without it, comments are re-categorised (and paid for) every time a post is opened on a fresh server instance.
+**Cache (only for Claude):** in Vercel, **Storage / Marketplace → Upstash Redis → Create** (free tier is enough), and copy its REST URL and token into the two `UPSTASH_` variables. Without it, comments are re-categorised (and paid for) every time a post is opened on a fresh server instance.
 
 ## 3. Using it
 
@@ -57,7 +60,9 @@ In developers.facebook.com, open your existing app:
 - **Date filter:** Meta sometimes ignores `since`/`until`, so the app also filters posts by date itself.
 - **Large posts:** up to about 2,000 comments per post are loaded.
 - **Login lasts about 60 days**, then Facebook asks again.
-- **Prompt:** in `lib/prompt.ts`. When you change it, bump `PROMPT_VERSION` so old cached results aren't reused.
+- **Built-in model:** it can't use the parent comment for context, so replies like "Still not received" are harder for it; sarcasm and rare languages too. Comments it's unsure about are marked **Needs review**. The first request after a server starts takes about 2 seconds while it trains.
+- **Improving the built-in model:** add real comments with the correct label to `lib/local/examples.json` (format: `["comment text", "Enquiry"]`, labels: Enquiry, Positive, Complaint, Negative, Spam), then redeploy. Real comments from your pages improve it the most. Sentence patterns for any product are in `lib/local/templates.ts`.
+- **Claude prompt:** in `lib/prompt.ts`. When you change it, bump `PROMPT_VERSION` so old cached results aren't reused.
 
 ## Project layout
 
@@ -70,8 +75,9 @@ app/api/adaccounts           Ad accounts
 app/api/posts                Posts in a date range (Instagram /media, Facebook /published_posts)
 app/api/ads                  Ads + ownership check for each ad's post
 app/api/comments             All comments and replies on one post
-app/api/classify             Categorisation with Claude (cached)
+app/api/classify             Categorisation (built-in model, or Claude)
 app/api/hide                 Hide / unhide one comment
 lib/graph.ts                 Graph API helper (adds appsecret_proof)
-lib/prompt.ts                Classifier prompt
+lib/local/                   Built-in classifier: model, patterns, examples
+lib/prompt.ts                Claude prompt (only with CLASSIFIER=claude)
 ```
