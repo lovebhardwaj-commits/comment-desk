@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox } from "lucide-react";
+import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock } from "lucide-react";
 import { api, fmtDate } from "./api";
 import Shell, { type View } from "./Shell";
 import CommentsPanel, { type Target } from "./CommentsPanel";
@@ -10,9 +10,9 @@ type PageAcc = { id: string; name: string; instagram: { id: string; username: st
 type Post = { id: string; text: string; time: string; permalink: string; comments: number; type: string; image?: string };
 type AdAcc = { id: string; name: string; active: boolean };
 type Ad = {
-  id: string; name: string; status: string; created: string;
-  instagram: { mediaId: string; owned: boolean; ownerUsername: string; brandUsername: string; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean; error?: string } | null;
-  facebook: { postId: string; pageId: string; owned: boolean; comments: number | null; permalink: string | null; caption: string; unreadable?: boolean; error?: string } | null;
+  id: string; name: string; status: string; created: string; image?: string | null; text?: string;
+  instagram: { mediaId: string; owned: boolean; ownerUsername: string; brandUsername: string; comments: number | null; permalink: string | null; caption: string; image?: string; unreadable?: boolean; error?: string } | null;
+  facebook: { postId: string; pageId: string; owned: boolean; comments: number | null; permalink: string | null; caption: string; image?: string; unreadable?: boolean; error?: string } | null;
 };
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -49,12 +49,14 @@ function App({ userName }: { userName: string }) {
   // Ads
   const [adAccounts, setAdAccounts] = useState<AdAcc[] | null>(null);
   const [adAccountId, setAdAccountId] = useState("");
-  const [adStatus, setAdStatus] = useState<"all" | "active">("all");
+  const [adStatus, setAdStatus] = useState<"all" | "active">("active");
   const [ads, setAds] = useState<Ad[] | null>(null);
   const [adsNext, setAdsNext] = useState<string | null>(null);
   const [adsBusy, setAdsBusy] = useState(false);
   const [adsError, setAdsError] = useState("");
   const [adsFetchedAt, setAdsFetchedAt] = useState("");
+  const [adId, setAdId] = useState("");
+  const [showLocked, setShowLocked] = useState(false);
 
   const [accountsError, setAccountsError] = useState("");
 
@@ -119,7 +121,7 @@ function App({ userName }: { userName: string }) {
   const loadAds = useCallback(async (after?: string) => {
     if (!adAccountId) return;
     setAdsBusy(true); setAdsError("");
-    if (!after) setAds(null);
+    if (!after) { setAds(null); setAdId(""); setTarget(null); }
     try {
       const qs = new URLSearchParams({ adAccountId, status: adStatus, ...(after ? { after } : {}) });
       const d = await api<{ ads: Ad[]; next: string | null }>(`/api/ads?${qs}`);
@@ -140,21 +142,44 @@ function App({ userName }: { userName: string }) {
   function switchView(v: View) {
     setView(v);
     setTarget(null);
+    setAdId("");
   }
 
   function openAd(ad: Ad, which: "instagram" | "facebook") {
+    setAdId(ad.id);
+    const title = `${ad.status === "ACTIVE" ? "Active" : "Paused"} ad · ${ad.name}`;
     if (which === "instagram" && ad.instagram) {
       setTarget({
         key: `instagram:${ad.instagram.mediaId}`, platform: "instagram", objectId: ad.instagram.mediaId, pageId: "",
-        brandUsername: ad.instagram.brandUsername, title: ad.name, caption: ad.instagram.caption, permalink: ad.instagram.permalink || "", kind: "ad",
+        brandUsername: ad.instagram.brandUsername, title, caption: ad.instagram.caption || ad.text || ad.name, permalink: ad.instagram.permalink || "",
+        image: ad.image || ad.instagram.image, kind: "ad",
       });
     } else if (which === "facebook" && ad.facebook) {
       setTarget({
         key: `facebook:${ad.facebook.postId}`, platform: "facebook", objectId: ad.facebook.postId, pageId: ad.facebook.pageId,
-        brandUsername: "", title: ad.name, caption: ad.facebook.caption, permalink: ad.facebook.permalink || "", kind: "ad",
+        brandUsername: "", title, caption: ad.facebook.caption || ad.text || ad.name, permalink: ad.facebook.permalink || "",
+        image: ad.image || ad.facebook.image, kind: "ad",
       });
     }
   }
+
+  /** Opens an ad on the placement with the most comments. */
+  function openAdCard(ad: Ad) {
+    const places = adPlacements(ad).sort((a, b) => (b.comments || 0) - (a.comments || 0));
+    if (places[0]) openAd(ad, places[0].platform);
+  }
+
+  const readableAds = useMemo(() => (ads || []).filter((a) => adPlacements(a).length > 0)
+    .sort((a, b) => adPlacements(b).reduce((n, p) => n + (p.comments || 0), 0) - adPlacements(a).reduce((n, p) => n + (p.comments || 0), 0)), [ads]);
+  const lockedAds = useMemo(() => (ads || []).filter((a) => adPlacements(a).length === 0), [ads]);
+  const shownAds = showLocked ? [...readableAds, ...lockedAds] : readableAds;
+  const currentAd = ads?.find((a) => a.id === adId);
+
+  // Open the ad with the most comments once ads load.
+  useEffect(() => {
+    if (view === "ads" && ads && !adId && readableAds[0]) openAdCard(readableAds[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ads, view]);
 
   const noPages = pages?.length === 0;
 
@@ -169,7 +194,7 @@ function App({ userName }: { userName: string }) {
               {fetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {fetchedAt}</div>}
             </div>
             <div className="controls">
-              <SelectPill icon={<Store />} label="Page" value={pageId} disabled={!pages?.length}
+              <SelectPill icon={<Store />} label="Page" title={page?.name} value={pageId} disabled={!pages?.length}
                 onChange={(v) => {
                   setPageId(v);
                   const p = pages?.find((x) => x.id === v);
@@ -179,13 +204,6 @@ function App({ userName }: { userName: string }) {
                 {noPages && <option>No Pages connected</option>}
                 {pages?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </SelectPill>
-              <div className="seg" role="group" aria-label="Platform">
-                <button aria-pressed={platform === "instagram"} disabled={!page?.instagram} onClick={() => setPlatform("instagram")}
-                  title={page && !page.instagram ? "No Instagram account connected for this Page" : undefined}>
-                  <Instagram />Instagram
-                </button>
-                <button aria-pressed={platform === "facebook"} onClick={() => setPlatform("facebook")}><Facebook />Facebook</button>
-              </div>
               <label className="pill dates" aria-label="Date range">
                 <CalendarDays />
                 <input type="date" value={since} max={until} onChange={(e) => e.target.value && setSince(e.target.value)} aria-label="From" />
@@ -212,8 +230,14 @@ function App({ userName }: { userName: string }) {
             <div className="workspace">
               <section className="card list-card" aria-label="Posts">
                 <div className="list-head">
-                  <h3>Posts</h3>
-                  <span className="count-pill">{posts ? `${posts.length}${postsNext ? "+" : ""} in range` : ""}</span>
+                  <h3>Posts <span className="count-pill">{posts ? `· ${posts.length}${postsNext ? "+" : ""}` : ""}</span></h3>
+                  <div className="seg sm" role="group" aria-label="Platform">
+                    <button aria-pressed={platform === "instagram"} disabled={!page?.instagram} onClick={() => setPlatform("instagram")}
+                      title={page && !page.instagram ? "No Instagram account connected for this Page" : undefined}>
+                      <Instagram />Instagram
+                    </button>
+                    <button aria-pressed={platform === "facebook"} onClick={() => setPlatform("facebook")}><Facebook />Facebook</button>
+                  </div>
                 </div>
                 <div className="list-body">
                   {postsError && <div className="callout danger" style={{ margin: 4 }}><div className="callout-main"><div className="callout-tag">Couldn&apos;t load posts</div><div className="callout-body">{postsError}</div></div></div>}
@@ -259,15 +283,11 @@ function App({ userName }: { userName: string }) {
               {adsFetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {adsFetchedAt}</div>}
             </div>
             <div className="controls">
-              <SelectPill icon={<Wallet />} label="Ad account" value={adAccountId} disabled={!adAccounts?.length} onChange={(v) => { setAdAccountId(v); setTarget(null); }}>
+              <SelectPill icon={<Wallet />} label="Ad account" title={adAccounts?.find((a) => a.id === adAccountId)?.name} value={adAccountId} disabled={!adAccounts?.length} onChange={(v) => { setAdAccountId(v); setTarget(null); setAdId(""); }}>
                 {!adAccounts && <option>Loading ad accounts…</option>}
                 {adAccounts?.length === 0 && <option>No ad accounts connected</option>}
                 {adAccounts?.map((a) => <option key={a.id} value={a.id}>{a.name}{a.active ? "" : " (inactive)"}</option>)}
               </SelectPill>
-              <div className="seg" role="group" aria-label="Ad status">
-                <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>Active + paused</button>
-                <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active only</button>
-              </div>
               <button className="btn btn-icon" onClick={() => loadAds()} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={adsBusy ? "spin" : undefined} />
               </button>
@@ -286,49 +306,69 @@ function App({ userName }: { userName: string }) {
             <div className="workspace">
               <section className="card list-card" aria-label="Ads">
                 <div className="list-head">
-                  <h3>Ads</h3>
-                  <span className="count-pill">{ads ? `${ads.length}${adsNext ? "+" : ""} ${adStatus === "active" ? "active" : "active or paused"}` : ""}</span>
+                  <h3>Ads <span className="count-pill">{ads ? `· ${readableAds.length}${adsNext ? "+" : ""}` : ""}</span></h3>
+                  <div className="seg sm" role="group" aria-label="Ad status">
+                    <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active</button>
+                    <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>Active + paused</button>
+                  </div>
                 </div>
+                {ads && lockedAds.length > 0 && (
+                  <div className="list-sub">
+                    <span>{lockedAds.length} partner {lockedAds.length === 1 ? "ad" : "ads"} can&apos;t be read</span>
+                    <label className="toggle">
+                      <input type="checkbox" checked={showLocked} onChange={(e) => setShowLocked(e.target.checked)} />
+                      <span className="track" />Show
+                    </label>
+                  </div>
+                )}
                 <div className="list-body">
                   {adsError && <div className="callout danger" style={{ margin: 4 }}><div className="callout-main"><div className="callout-tag">Couldn&apos;t load ads</div><div className="callout-body">{adsError}</div></div></div>}
                   {!ads && !adsError && <ListSkeleton />}
-                  {ads?.length === 0 && !adsError && <Empty small icon={<Megaphone />} title="No ads with this status" />}
-                  {ads?.map((ad) => {
-                    const current = target?.key === `instagram:${ad.instagram?.mediaId}` || target?.key === `facebook:${ad.facebook?.postId}`;
+                  {ads && readableAds.length === 0 && !showLocked && !adsError && (
+                    <Empty small icon={<Megaphone />} title={ads.length ? "No readable ads here" : "No ads with this status"}>
+                      {ads.length ? "All ads in this list run from partner accounts. Turn on “Show” above to see why." : adStatus === "active" ? "Try “Active + paused”." : undefined}
+                    </Empty>
+                  )}
+                  {shownAds.map((ad) => {
+                    const locked = !adPlacements(ad).length;
+                    const total = adPlacements(ad).reduce((n, p) => n + (p.comments || 0), 0);
                     return (
-                      <div key={ad.id} className={`ad-item${current ? " current" : ""}`}>
-                        <div className={`status ${ad.status}`}>{ad.status.toLowerCase()} · {fmtDate(ad.created)}</div>
-                        <div className="ad-name">{ad.name}</div>
-                        <div className="plats">
-                          {ad.instagram && (ad.instagram.unreadable ? (
-                            <span className="chip off" title={ad.instagram.error}><Instagram />Can&apos;t read post</span>
-                          ) : ad.instagram.owned ? (
-                            <button className="chip" aria-current={target?.key === `instagram:${ad.instagram.mediaId}`} onClick={() => openAd(ad, "instagram")}>
-                              <Instagram />{ad.instagram.comments ?? 0} comments
-                            </button>
-                          ) : (
-                            <span className="chip off" title="The post belongs to the creator's Instagram account, so its comments can't be read here."><Instagram />On @{ad.instagram.ownerUsername} · partner</span>
-                          ))}
-                          {ad.facebook && (ad.facebook.owned ? (
-                            <button className="chip" aria-current={target?.key === `facebook:${ad.facebook.postId}`} onClick={() => openAd(ad, "facebook")}>
-                              <Facebook />{ad.facebook.comments ?? 0} comments
-                            </button>
-                          ) : (
-                            <span className="chip off" title="If this is the merchant's own Page, reconnect and tick it. If it's the creator's Page, its comments can't be read."><Facebook />Page not connected</span>
-                          ))}
-                          {!ad.instagram && !ad.facebook && <span className="chip off">No post found</span>}
-                        </div>
-                        {(ad.instagram?.error || ad.facebook?.error) && <div className="ad-note" title={ad.instagram?.error || ad.facebook?.error}>{friendlyMetaError(ad.instagram?.error || ad.facebook?.error || "")}</div>}
-                      </div>
+                      <button key={ad.id} className={`ad-card${locked ? " locked" : ""}`} aria-current={adId === ad.id}
+                        onClick={() => !locked && openAdCard(ad)} title={locked ? lockReason(ad) : undefined} aria-disabled={locked}>
+                        {ad.image ? <img className="thumb" src={ad.image} alt="" loading="lazy" /> : <span className="thumb"><Megaphone /></span>}
+                        <span className="post-body">
+                          <span className="post-meta">
+                            <span className={`status ${ad.status}`}>{ad.status === "ACTIVE" ? "Active" : "Paused"}</span>·
+                            <span className="ad-places">
+                              {ad.instagram && <Instagram />}{ad.facebook && <Facebook />}
+                            </span>·
+                            <span className="comment-count"><MessageCircle />{locked ? "–" : total}</span>
+                          </span>
+                          <span className="post-text">{ad.text || ad.name}</span>
+                          {ad.text && <span className="ad-code" title={ad.name}>{ad.name}</span>}
+                          {locked && <span className="lock-note"><Lock />{lockReason(ad)}</span>}
+                        </span>
+                      </button>
                     );
                   })}
                   {adsNext && <div className="more"><button className="btn" disabled={adsBusy} onClick={() => loadAds(adsNext)}>{adsBusy ? "Loading…" : "Load more ads"}</button></div>}
                 </div>
               </section>
               <section className="detail" aria-label="Comments">
-                {target ? <CommentsPanel key={target.key} target={target} /> : (
-                  <div className="card"><Empty icon={<Megaphone />} title="Pick an ad">Choose the Instagram or Facebook chip on an ad to see its comments.</Empty></div>
-                )}
+                {target && currentAd ? (
+                  <CommentsPanel key={target.key} target={target} headerExtra={adPlacements(currentAd).length > 1 ? (
+                    <div className="seg sm" role="group" aria-label="Placement">
+                      {adPlacements(currentAd).map((p) => (
+                        <button key={p.platform} aria-pressed={target.platform === p.platform} onClick={() => openAd(currentAd, p.platform)}>
+                          {p.platform === "instagram" ? <Instagram /> : <Facebook />}
+                          {p.platform === "instagram" ? "Instagram" : "Facebook"} · {p.comments ?? 0}
+                        </button>
+                      ))}
+                    </div>
+                  ) : undefined} />
+                ) : ads && readableAds.length > 0 ? (
+                  <div className="card"><Empty icon={<Megaphone />} title="Pick an ad">Choose an ad on the left to see and moderate its comments.</Empty></div>
+                ) : ads ? null : <div className="card"><Empty icon={<Megaphone />} title="Loading ads…" /></div>}
               </section>
             </div>
           )}
@@ -336,6 +376,23 @@ function App({ userName }: { userName: string }) {
       )}
     </Shell>
   );
+}
+
+type Placement = { platform: "instagram" | "facebook"; comments: number | null };
+
+/** Placements of an ad whose comments this login can read. */
+function adPlacements(ad: Ad): Placement[] {
+  const out: Placement[] = [];
+  if (ad.instagram && ad.instagram.owned && !ad.instagram.unreadable) out.push({ platform: "instagram", comments: ad.instagram.comments });
+  if (ad.facebook && ad.facebook.owned && !ad.facebook.unreadable) out.push({ platform: "facebook", comments: ad.facebook.comments });
+  return out;
+}
+
+function lockReason(ad: Ad) {
+  if (ad.instagram?.error || ad.facebook?.error) return friendlyMetaError(ad.instagram?.error || ad.facebook?.error || "");
+  if (ad.instagram && !ad.instagram.owned && ad.instagram.ownerUsername) return `Runs from @${ad.instagram.ownerUsername}'s account (partnership ad), so its comments belong to them.`;
+  if (ad.facebook && !ad.facebook.owned) return "The Facebook Page behind this ad isn't connected. If it's the merchant's Page, reconnect and tick it.";
+  return "No post found for this ad.";
 }
 
 /** Turns Meta's error messages into something a person can act on. */
