@@ -82,3 +82,7 @@
 .log-details { margin: 6px 0 0; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
 .log-empty { text-align: center; color: var(--muted); padding: 24px 0; }
 .modal:has(.log-list) { max-width: 720px; }
+.breakdown-line { margin-top: 8px; font-size: 12.5px; color: var(--muted); cursor: help; }
+.breakdown-line b { color: var(--ink); font-weight: 700; }
+.breakdown-line .warn { color: var(--warn); font-weight: 600; }
+.breakdown-line .faint { color: var(--faint); }

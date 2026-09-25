@@ -92,7 +92,7 @@ const labelOf = (r: Result) =>
   r.label || (r.category === "Negative" ? (r.negative_type === "complaint" ? "Complaint" : r.negative_type === "spam" ? "Spam" : "Negative") : r.category);
 
 const KPI: { key: Filter; label: string; color: string }[] = [
-  { key: "All", label: "All", color: "var(--violet)" },
+  { key: "All", label: "Open", color: "var(--violet)" },
   { key: "Enquiry", label: "Enquiry", color: "var(--enquiry)" },
   { key: "Positive", label: "Positive", color: "var(--positive)" },
   { key: "Negative", label: "Negative", color: "var(--negative)" },
@@ -216,7 +216,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
     if (!first || !hadCache) setSync((s) => ({ ...s, phase: hadCache ? "checking" : "loading" }));
     try {
-      const { targets, stats } = await api<{ targets: InboxTarget[]; stats?: Sync["stats"] }>(spec.targetsUrl);
+      const res = await api<{ targets?: InboxTarget[]; stats?: Sync["stats"] }>(spec.targetsUrl);
+      const targets = Array.isArray(res?.targets) ? res.targets : [];
+      const stats = res?.stats;
       const byId = new Map(targets.map((t) => [t.objectId, t]));
       for (const k of Object.keys(byObj.current)) if (!byId.has(k)) delete byObj.current[k];
       const needLonger = cachedSince.current > spec.sinceMs + 60_000;
@@ -514,6 +516,18 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     return c;
   }, [allCustomer, results]);
 
+  // How the comments in view add up: open (customer, still visible) + hidden + the brand's own replies.
+  // For a single post this is compared with Meta's own count, so the numbers always reconcile on screen.
+  const tally = useMemo(() => {
+    const inView = (comments || []).filter(inWin);
+    const brand = inView.filter((c) => c.isBrand).length;
+    const hidden = inView.filter((c) => !c.isBrand && c.hidden).length;
+    const open = inView.length - brand - hidden;
+    return { loaded: inView.length, open, hidden, brand };
+  }, [comments, sinceMs, untilMs, plat]);
+  const reported = !inbox ? target?.count : undefined;
+  const notReturned = reported != null ? Math.max(0, reported - tally.loaded) : 0;
+
   // Open comments per platform in the window, so it's obvious whether Instagram and Facebook are both there.
   const platCounts = useMemo(() => {
     const c = { instagram: 0, facebook: 0 };
@@ -628,6 +642,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             <div className="hero-meta">
               <SyncLine sync={sync} noun={inbox.noun || "post"} />
             </div>
+            {comments && sync.phase === "ready" && (
+              <div className="breakdown-line">
+                {tally.loaded.toLocaleString("en-IN")} comments in this window = <b>{tally.open.toLocaleString("en-IN")} open</b>
+                {` + ${tally.hidden.toLocaleString("en-IN")} hidden + ${tally.brand.toLocaleString("en-IN")} brand replies`}
+              </div>
+            )}
             <LimitNotes sync={sync} noun={inbox.noun || "post"} />
           </div>
         </div>
@@ -647,6 +667,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
             <SyncLine sync={sync} noun="post" single />
           </div>
+          {comments && sync.phase === "ready" && reported != null && (
+            <Breakdown platform={target!.platform} reported={reported} tally={tally} notReturned={notReturned} />
+          )}
           {sync.gap && (
             <div className="limit-notes">
               <div className="limit-note"><Info />
@@ -682,8 +705,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
               <div className="kpi-label"><i />{k.label}</div>
               <div className="kpi-value">{comments ? n : "–"}</div>
               <div className="kpi-sub">
-                {k.key === "All" ? (progress ? "Categorising…" : "open comments") : comments ? `${share}%` : " "}
-                {k.key !== "Review" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
+                {k.key === "All"
+                  ? (progress ? "Categorising…" : reported != null ? `of ${reported.toLocaleString("en-IN")} total` : `${tally.loaded.toLocaleString("en-IN")} total`)
+                  : comments ? `${share}%` : " "}
+                {k.key !== "Review" && k.key !== "All" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
               </div>
               {k.key !== "All" && <span className="kpi-bar" style={{ width: `${share}%` }} />}
             </button>
@@ -897,6 +922,22 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       </div>
       </div>
       </div>
+    </div>
+  );
+}
+
+/** How Meta's comment count for one post adds up: open + hidden + brand replies + any Meta didn't return. */
+function Breakdown({ platform, reported, tally, notReturned }: {
+  platform: string; reported: number; tally: { loaded: number; open: number; hidden: number; brand: number }; notReturned: number;
+}) {
+  const n = (x: number) => x.toLocaleString("en-IN");
+  const where = platform === "instagram" ? "Instagram" : "Facebook";
+  const big = notReturned > 3 && notReturned > reported * 0.05;
+  return (
+    <div className="breakdown-line" title="Open = customer comments still visible. Hidden = hidden on Instagram/Facebook. Brand replies = the brand's own comments. Not returned = counted by Meta but not given to apps (usually deleted, or from restricted or private accounts).">
+      {n(reported)} on {where} = <b>{n(tally.open)} open</b> + {n(tally.hidden)} hidden + {n(tally.brand)} brand replies
+      {notReturned > 0 && <> + <span className={big ? "warn" : ""}>{n(notReturned)} not returned by Meta</span></>}
+      {tally.loaded > reported && <> <span className="faint">({n(tally.loaded - reported)} more than Meta&apos;s count, which can lag behind)</span></>}
     </div>
   );
 }
