@@ -21,7 +21,11 @@ type Comment = {
 };
 type InboxTarget = Src & { count: number };
 export type InboxSpec = {
-  key: string; cacheKey: string; days: number; scope: string; noun?: "post" | "ad"; targetsUrl: string;
+  key: string; cacheKey: string; scope: string; noun?: "post" | "ad"; targetsUrl: string;
+  /** The window being shown, in milliseconds. */
+  sinceMs: number; untilMs: number;
+  /** "last 7 days" or "12 Sept – 20 Sept", and the same as a phrase: "in the last 7 days" / "between 12 Sept and 20 Sept". */
+  label: string; phrase: string;
   refresh: number; onOpen?: (src: Src) => void; onFetched?: () => void;
 };
 type Sync = {
@@ -29,7 +33,7 @@ type Sync = {
   cachedAt?: number; checkedAt?: number; total?: number; loaded?: number; changed?: number; checked?: number;
   failed?: number; skipped?: number; withNew?: number; error?: string;
 };
-type InboxCache = { byObj: Record<string, Comment[]>; counts: Record<string, number>; days: number; results: Record<string, Result> };
+type InboxCache = { byObj: Record<string, Comment[]>; counts: Record<string, number>; since: number; results: Record<string, Result> };
 type PostCache = { count: number | null; comments: Comment[]; results: Record<string, Result> };
 
 /** Reads an NDJSON stream line by line. */
@@ -142,7 +146,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   // ---------- Caching ----------
   const byObj = useRef<Record<string, Comment[]>>({});
   const objCounts = useRef<Record<string, number>>({});
-  const cachedDays = useRef(0);
+  // Earliest moment the cached comments cover. If the window starts earlier, everything is refetched.
+  const cachedSince = useRef(Number.MAX_SAFE_INTEGER);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cacheKey = inbox ? inbox.cacheKey : target ? `obj:${target.platform}:${target.objectId}` : "";
 
@@ -157,7 +162,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         const grouped: Record<string, Comment[]> = {};
         for (const k of Object.keys(byObj.current)) grouped[k] = [];
         for (const c of list) if (c.src) (grouped[c.src.objectId] ||= []).push(c);
-        cacheSet(cacheKey, { byObj: grouped, counts: objCounts.current, days: cachedDays.current, results } satisfies InboxCache);
+        cacheSet(cacheKey, { byObj: grouped, counts: objCounts.current, since: cachedSince.current, results } satisfies InboxCache);
       } else {
         cacheSet(cacheKey, { count: target?.count ?? null, comments: list, results } satisfies PostCache);
       }
@@ -172,7 +177,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     if (first) {
       const c = await cacheGet<InboxCache>(spec.cacheKey);
       if (c) {
-        byObj.current = c.value.byObj; objCounts.current = c.value.counts; cachedDays.current = c.value.days;
+        byObj.current = c.value.byObj; objCounts.current = c.value.counts; cachedSince.current = c.value.since ?? Number.MAX_SAFE_INTEGER;
         resultsRef.current = c.value.results; setResults(c.value.results);
         setComments(flat());
         hadCache = true;
@@ -184,7 +189,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       const { targets } = await api<{ targets: InboxTarget[] }>(spec.targetsUrl);
       const byId = new Map(targets.map((t) => [t.objectId, t]));
       for (const k of Object.keys(byObj.current)) if (!byId.has(k)) delete byObj.current[k];
-      const needLonger = cachedDays.current < spec.days;
+      const needLonger = cachedSince.current > spec.sinceMs + 60_000;
       const changed = targets.filter((t) => full || needLonger || objCounts.current[t.objectId] !== t.count || !byObj.current[t.objectId]);
       const base = { checked: targets.length, checkedAt: Date.now() };
       if (!changed.length) {
@@ -198,7 +203,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       let loaded = 0, failed = 0, skipped = 0;
       setSync((s) => ({ ...s, ...base, phase: hadCache ? "updating" : "loading", total: changed.length, loaded: 0 }));
       if (!hadCache) setComments([]);
-      await readStream("/api/inbox/comments", { targets: changed.map(({ count, ...t }) => t), days: spec.days }, (m) => {
+      await readStream("/api/inbox/comments", { targets: changed.map(({ count, ...t }) => t), since: Math.min(spec.sinceMs, needLonger || full ? spec.sinceMs : cachedSince.current), until: Date.now() }, (m) => {
         if (m.type === "comments") {
           const t = byId.get(m.objectId)!;
           const { count, ...src } = t;
@@ -212,7 +217,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         else if (m.type === "skipped") { skipped++; loaded++; }
         if (m.type !== "done") setSync((s) => ({ ...s, loaded, failed, skipped }));
       });
-      cachedDays.current = full || needLonger ? spec.days : Math.min(cachedDays.current, spec.days);
+      if (full || needLonger) cachedSince.current = spec.sinceMs;
       setSync((s) => ({ ...s, phase: "ready", changed: changed.length - failed - skipped, failed, skipped, checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length }));
       spec.onFetched?.();
       persistSoon();
@@ -401,9 +406,14 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   }
 
   // Comments inside the chosen time window (the cache may hold a longer window).
-  const sinceMs = inbox ? Date.now() - inbox.days * 864e5 : 0;
-  const inWin = (c: Comment) => !sinceMs || Date.parse(c.time) >= sinceMs;
-  const customer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, inbox?.days]);
+  const sinceMs = inbox ? inbox.sinceMs : 0;
+  const untilMs = inbox ? inbox.untilMs : 0;
+  const inWin = (c: Comment) => {
+    if (!inbox) return true;
+    const t = Date.parse(c.time);
+    return t >= sinceMs && t <= untilMs;
+  };
+  const customer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, sinceMs, untilMs]);
 
   const counts = useMemo(() => {
     const c = { All: customer.length, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
@@ -450,7 +460,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
     };
     return {
-      tone: "info", tag: "Info", title: inbox ? `Nothing needs action in the ${inbox.days === 1 ? "last 24 hours" : `last ${inbox.days} days`}` : "Nothing needs action on this post",
+      tone: "info", tag: "Info", title: inbox ? `Nothing needs action ${inbox.phrase}` : "Nothing needs action on this post",
       body: "No complaints, spam or unanswered enquiries.", action: "", button: null,
     };
   }, [customer, results, replied, progress]);
@@ -476,7 +486,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       for (const r of list) if (r.parentId === t.id) out.push(r);
     }
     return out;
-  }, [comments, results, filter, query, sort, showBrand, moving, inbox?.days]);
+  }, [comments, results, filter, query, sort, showBrand, moving, sinceMs, untilMs]);
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
@@ -491,7 +501,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
 
   const PlatformIcon = target?.platform === "instagram" ? Instagram : Facebook;
-  const windowLabel = inbox ? (inbox.days === 1 ? "last 24 hours" : `last ${inbox.days} days`) : "";
+  const windowLabel = inbox ? inbox.label : "";
+  const fmtRange = (ms: number) => new Date(ms).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
   return (
     <div>
@@ -501,6 +512,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div style={{ minWidth: 0, flex: 1 }}>
             <h2>All comments · {windowLabel}</h2>
             <div className="caption">{inbox.scope}</div>
+            <div className="range-line">Showing comments from <b>{fmtRange(inbox.sinceMs)}</b> to <b>{inbox.untilMs >= Date.now() - 120_000 ? "now" : fmtRange(inbox.untilMs)}</b></div>
             <div className="hero-meta">
               <SyncLine sync={sync} noun={inbox.noun || "post"} />
             </div>
@@ -601,7 +613,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       {loadError && <div className="callout danger"><div className="callout-main"><div className="callout-tag">Couldn&apos;t load comments</div><div className="callout-body">{loadError}</div></div></div>}
       {(!comments || (comments.length === 0 && sync.phase === "loading")) && !loadError && <CommentSkeleton />}
       {comments && comments.length === 0 && sync.phase !== "loading" && (inbox
-        ? <div className="card"><Empty icon={<Inbox />} title={`No new comments in the ${windowLabel}`}>You&apos;re all caught up. Try a longer window if you expected more.</Empty></div>
+        ? <div className="card"><Empty icon={<Inbox />} title={`No comments ${inbox.phrase}`}>You&apos;re all caught up. Try a longer window if you expected more.</Empty></div>
         : <div className="card"><Empty icon={<MessageCircle />} title="No comments yet">When people comment on this {target?.kind === "ad" ? "ad" : "post"}, they&apos;ll appear here.</Empty></div>)}
       {comments && comments.length > 0 && visible.length === 0 && (
         <div className="card"><Empty small icon={<Search />} title="Nothing matches">Try another filter or search.</Empty></div>
