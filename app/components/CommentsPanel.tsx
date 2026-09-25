@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
@@ -32,6 +32,7 @@ type Sync = {
   phase: "loading" | "checking" | "updating" | "ready" | "error";
   cachedAt?: number; checkedAt?: number; total?: number; loaded?: number; changed?: number; checked?: number;
   failed?: number; skipped?: number; withNew?: number; error?: string;
+  stats?: { checked: number; unreadable: number; capped: boolean; withComments: number };
 };
 type InboxCache = { byObj: Record<string, Comment[]>; counts: Record<string, number>; since: number; results: Record<string, Result> };
 type PostCache = { count: number | null; comments: Comment[]; results: Record<string, Result> };
@@ -95,6 +96,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"newest" | "oldest">("newest");
   const [showBrand, setShowBrand] = useState(false);
+  const [showHidden, setShowHidden] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -186,12 +188,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
     if (!first || !hadCache) setSync((s) => ({ ...s, phase: hadCache ? "checking" : "loading" }));
     try {
-      const { targets } = await api<{ targets: InboxTarget[] }>(spec.targetsUrl);
+      const { targets, stats } = await api<{ targets: InboxTarget[]; stats?: Sync["stats"] }>(spec.targetsUrl);
       const byId = new Map(targets.map((t) => [t.objectId, t]));
       for (const k of Object.keys(byObj.current)) if (!byId.has(k)) delete byObj.current[k];
       const needLonger = cachedSince.current > spec.sinceMs + 60_000;
       const changed = targets.filter((t) => full || needLonger || objCounts.current[t.objectId] !== t.count || !byObj.current[t.objectId]);
-      const base = { checked: targets.length, checkedAt: Date.now() };
+      const base = { checked: targets.length, checkedAt: Date.now(), stats };
       if (!changed.length) {
         setComments(flat());
         setSync((s) => ({ ...s, ...base, phase: "ready", changed: 0, withNew: Object.values(byObj.current).filter((l) => l.length).length }));
@@ -262,6 +264,14 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     (inbox ? runInbox(false, true) : runTarget(false, true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadKey]);
+
+  // When "last 24 hours" etc. moves forward (tab returned after a while), check for new comments.
+  const lastSince = useRef(inbox?.sinceMs);
+  useEffect(() => {
+    if (!inbox || lastSince.current === undefined) return;
+    if (Math.abs(inbox.sinceMs - lastSince.current) > 60_000) { lastSince.current = inbox.sinceMs; runInbox(false, false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inbox?.sinceMs]);
 
   // Refresh button: refetch everything, but keep showing the current comments meanwhile.
   const firstRefresh = useRef(inbox ? inbox.refresh : refresh);
@@ -413,7 +423,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const t = Date.parse(c.time);
     return t >= sinceMs && t <= untilMs;
   };
-  const customer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, sinceMs, untilMs]);
+  // Every customer comment in the window, and the ones still public ("open"). KPIs count open comments only:
+  // a hidden comment has already been dealt with.
+  const allCustomer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, sinceMs, untilMs]);
+  const customer = useMemo(() => allCustomer.filter((c) => !c.hidden), [allCustomer]);
 
   const counts = useMemo(() => {
     const c = { All: customer.length, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
@@ -424,6 +437,16 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
     return c;
   }, [customer, results]);
+  const hiddenCounts = useMemo(() => {
+    const c = { All: 0, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
+    for (const x of allCustomer) {
+      if (!x.hidden) continue;
+      c.All++;
+      const r = results[x.id];
+      if (r && r.category !== "Unclassified") c[r.category]++;
+    }
+    return c;
+  }, [allCustomer, results]);
 
   // Which comments the brand has already replied to.
   const replied = useMemo(() => {
@@ -434,7 +457,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
   const insight = useMemo(() => {
     if (progress || !customer.length) return null;
-    const visible = customer.filter((c) => !c.hidden);
+    const visible = customer;
     const complaints = visible.filter((c) => results[c.id]?.negative_type === "complaint");
     const openEnq = visible.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id));
     const spam = visible.filter((c) => results[c.id]?.negative_type === "spam" && c.canHide);
@@ -470,6 +493,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const list = (comments || []).filter((c) => {
       if (!inWin(c)) return false;
       if (c.isBrand) return showBrand && filter === "All" && !q;
+      if (c.hidden && !showHidden) return false;
       if (q && !c.text.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
       if (filter === "All") return true;
       if (moving[c.id]) return true;
@@ -486,7 +510,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       for (const r of list) if (r.parentId === t.id) out.push(r);
     }
     return out;
-  }, [comments, results, filter, query, sort, showBrand, moving, sinceMs, untilMs]);
+  }, [comments, results, filter, query, sort, showBrand, showHidden, moving, sinceMs, untilMs]);
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
@@ -499,6 +523,15 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const selectedHideable = [...selected].filter((id) => hideable.some((c) => c.id === id));
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
+
+  // Fetching overlay: while Meta is being checked or new comments are loading, the (possibly stale) list is
+  // dimmed and can't be acted on, and a card in the middle says what's happening.
+  const busyNow = sync.phase === "checking" || sync.phase === "updating" || sync.phase === "loading";
+  const nounOf = inbox?.noun || "post";
+  const busyTitle = sync.phase === "checking" ? "Checking Meta for new comments…" : "Fetching comments from Meta…";
+  const busyDetail = sync.phase === "checking"
+    ? (sync.cachedAt ? `Saved copy from ${ago(sync.cachedAt)} shown underneath` : "This takes a few seconds")
+    : sync.total ? `${sync.loaded || 0} of ${sync.total} ${nounOf}${sync.total === 1 ? "" : "s"} done` : "Almost there";
 
   const PlatformIcon = target?.platform === "instagram" ? Instagram : Facebook;
   const windowLabel = inbox ? inbox.label : "";
@@ -516,6 +549,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             <div className="hero-meta">
               <SyncLine sync={sync} noun={inbox.noun || "post"} />
             </div>
+            <LimitNotes sync={sync} noun={inbox.noun || "post"} />
           </div>
         </div>
       ) : target ? (
@@ -539,6 +573,18 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       </div>
       ) : null}
 
+      <div className="panel-body" aria-busy={busyNow}>
+      {busyNow && (
+        <div className="busy-overlay" role="status" aria-live="polite">
+          <div className="busy-card">
+            <span className="spinner" aria-hidden />
+            <strong>{busyTitle}</strong>
+            <span>{busyDetail}</span>
+            {!!sync.total && <div className="progress"><i style={{ width: `${(100 * (sync.loaded || 0)) / sync.total}%` }} /></div>}
+          </div>
+        </div>
+      )}
+      <div className="panel-content" inert={busyNow || undefined}>
       <div className="kpis" role="group" aria-label="Filter by category">
         {KPI.map((k) => {
           const n = counts[k.key];
@@ -547,16 +593,16 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             <button key={k.key} className="kpi" aria-pressed={filter === k.key} onClick={() => setFilter(k.key)} style={{ ["--k" as any]: k.color }}>
               <div className="kpi-label"><i />{k.label}</div>
               <div className="kpi-value">{comments ? n : "–"}</div>
-              <div className="kpi-sub">{k.key === "All" ? (progress ? "Categorising…" : "comments") : comments ? `${share}%` : " "}</div>
+              <div className="kpi-sub">
+                {k.key === "All" ? (progress ? "Categorising…" : "open comments") : comments ? `${share}%` : " "}
+                {k.key !== "Review" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
+              </div>
               {k.key !== "All" && <span className="kpi-bar" style={{ width: `${share}%` }} />}
             </button>
           );
         })}
       </div>
 
-      {inbox && (sync.phase === "loading" || sync.phase === "updating") && !!sync.total && (
-        <div className="progress" aria-label="Loading comments"><i style={{ width: `${(100 * (sync.loaded || 0)) / sync.total}%` }} /></div>
-      )}
       {progress && <div className="progress" aria-label="Categorising"><i style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 100}%` }} /></div>}
 
       {insight && (
@@ -588,6 +634,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <button className="btn btn-sm btn-danger" onClick={() => { setHideAllResult(null); setHideAllOpen(true); }}>
             <EyeOff />Hide all negative ({negativeTargets.length})
           </button>
+        )}
+        {hiddenCounts.All > 0 && (
+          <label className="toggle" title="Comments already hidden on Instagram or Facebook">
+            <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
+            <span className="track" />Hidden ({hiddenCounts.All})
+          </label>
         )}
         <label className="toggle">
           <input type="checkbox" checked={showBrand} onChange={(e) => setShowBrand(e.target.checked)} />
@@ -742,8 +794,22 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           );
         })}
       </div>
+      </div>
+      </div>
     </div>
   );
+}
+
+/** Warns when the inbox had to stop early, or couldn't read some posts or ads. */
+function LimitNotes({ sync, noun }: { sync: Sync; noun: string }) {
+  const s = sync.stats;
+  if (!s || sync.phase !== "ready") return null;
+  const notes: string[] = [];
+  if (s.capped) notes.push(`${s.withComments} ${noun}s have comments, more than can be read at once: only ${sync.checked} were read${noun === "post" ? " (those with the most comments)" : " (active ads first)"}. Narrow the time window${noun === "ad" ? " or switch to Active only" : ""} to cover the rest.`);
+  if (s.unreadable) notes.push(`${s.unreadable} ${noun}${s.unreadable === 1 ? "" : "s"} couldn't be read (partnership ads on a creator's account, or missing access).`);
+  if (sync.skipped) notes.push(`${sync.skipped} ${noun}${sync.skipped === 1 ? " was" : "s were"} skipped to stay within the time limit. Press refresh to load ${sync.skipped === 1 ? "it" : "them"}.`);
+  if (!notes.length) return null;
+  return <div className="limit-notes">{notes.map((n) => <div key={n} className="limit-note"><Info />{n}</div>)}</div>;
 }
 
 /** One line saying how fresh the data is: saved copy, checking, updating, or up to date. */
