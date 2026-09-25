@@ -1,11 +1,12 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Instagram, Facebook, CalendarDays, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList } from "lucide-react";
+import { Instagram, Facebook, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList } from "lucide-react";
 import { api, fmtDate } from "./api";
 import Shell, { type View } from "./Shell";
 import CommentsPanel, { type Target, type Src } from "./CommentsPanel";
 import { cacheGet, cacheSet, setCacheNamespace } from "./cache";
 import { ToastProvider, SelectPill, Empty, ListSkeleton } from "./ui";
+import DateRange from "./DateRange";
 
 type PageAcc = { id: string; name: string; instagram: { id: string; username: string } | null };
 type Post = { id: string; text: string; time: string; permalink: string; comments: number; type: string; image?: string };
@@ -46,7 +47,7 @@ function App({ userName }: { userName: string }) {
   const [postsNext, setPostsNext] = useState<string | null>(null);
   const [postsBusy, setPostsBusy] = useState(false);
   const [postsError, setPostsError] = useState("");
-  const [fetchedAt, setFetchedAt] = useState("");
+  const [, setFetchedAt] = useState("");
 
   // Ads
   const [adAccounts, setAdAccounts] = useState<AdAcc[] | null>(null);
@@ -56,13 +57,13 @@ function App({ userName }: { userName: string }) {
   const [adsNext, setAdsNext] = useState<string | null>(null);
   const [adsBusy, setAdsBusy] = useState(false);
   const [adsError, setAdsError] = useState("");
-  const [adsFetchedAt, setAdsFetchedAt] = useState("");
+  const [, setAdsFetchedAt] = useState("");
   const [adId, setAdId] = useState("");
   const [showLocked, setShowLocked] = useState(false);
 
   const [accountsError, setAccountsError] = useState("");
 
-  // 7-day inbox: the default way in, so every comment can be handled in one pass.
+  // "All comments" is the default way in, so every comment can be handled in one pass.
   const [postsMode, setPostsMode] = useState<"inbox" | "list">("inbox");
   const [adsMode, setAdsMode] = useState<"inbox" | "list">("inbox");
   // Time window for "All comments": a preset (anchored to when it was picked or refreshed) or a custom date range.
@@ -101,6 +102,16 @@ function App({ userName }: { userName: string }) {
   }, [view, adAccounts]);
 
   const page = useMemo(() => pages?.find((p) => p.id === pageId), [pages, pageId]);
+
+  // "Last 24 hours" etc. are measured from when they were picked. When the tab comes back into view
+  // after more than 5 minutes, move the window up to now, so the label stays true.
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState === "visible" && preset !== "custom" && Date.now() - stamp > 5 * 60 * 1000) setStamp(Date.now());
+    };
+    document.addEventListener("visibilitychange", onShow);
+    return () => document.removeEventListener("visibilitychange", onShow);
+  }, [preset, stamp]);
 
   const win = useMemo(() => {
     if (preset !== "custom") {
@@ -165,7 +176,7 @@ function App({ userName }: { userName: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, platform, since, until, view, pages, postsMode]);
 
-  /** Loads ads. The ad list is slow to build (one call per ad), so a cached copy under 5 minutes old is used as is. */
+  /** Loads ads. The ad list is slow to build, so a cached copy under 5 minutes old is used as is. */
   const loadAds = useCallback(async (after?: string, force = false) => {
     if (!adAccountId) return;
     setAdsBusy(true); setAdsError("");
@@ -203,7 +214,7 @@ function App({ userName }: { userName: string }) {
 
   function openAd(ad: Ad, which: "instagram" | "facebook") {
     setAdId(ad.id);
-    const title = `${ad.status === "ACTIVE" ? "Active" : "Paused"} ad · ${ad.name}`;
+    const title = `${statusLabel(ad.status)} ad · ${ad.name}`;
     if (which === "instagram" && ad.instagram) {
       setTarget({
         key: `instagram:${ad.instagram.mediaId}`, platform: "instagram", objectId: ad.instagram.mediaId, pageId: "",
@@ -282,25 +293,22 @@ function App({ userName }: { userName: string }) {
     </div>
   );
 
-  const today = iso(new Date());
-  const minDay = iso(new Date(Date.now() - 90 * 864e5));
-  // Rendered as an element (not a component) so the date inputs keep focus while you pick dates.
+  // Rendered as an element (not a component) so it keeps its state across renders.
   const daysSeg = (
-    <>
-      <div className="seg" role="group" aria-label="Time window">
-        {([1, 7, 14] as const).map((d) => (
-          <button key={d} aria-pressed={preset === d} onClick={() => { setPreset(d); setStamp(Date.now()); }}>{d === 1 ? "24 hours" : `${d} days`}</button>
-        ))}
-        <button aria-pressed={preset === "custom"} onClick={() => setPreset("custom")}><CalendarDays />Custom</button>
-      </div>
-      {preset === "custom" && (
-        <label className="pill dates" aria-label="Custom date range">
-          <input type="date" value={rangeFrom} min={minDay} max={rangeTo} onChange={(e) => e.target.value && setRangeFrom(e.target.value)} aria-label="From" />
-          <span className="dash">–</span>
-          <input type="date" value={rangeTo} min={rangeFrom} max={today} onChange={(e) => e.target.value && setRangeTo(e.target.value)} aria-label="To" />
-        </label>
-      )}
-    </>
+    <div className="seg" role="group" aria-label="Time window">
+      {([1, 7, 14] as const).map((d) => (
+        <button key={d} aria-pressed={preset === d} onClick={() => { setPreset(d); setStamp(Date.now()); }}>{d === 1 ? "24 hours" : `${d} days`}</button>
+      ))}
+    </div>
+  );
+  const customRange = (
+    <DateRange from={rangeFrom} to={rangeTo} active={preset === "custom"}
+      onApply={(f, t) => { setRangeFrom(f); setRangeTo(t); setPreset("custom"); }} />
+  );
+  const refreshBtn = (busy: boolean, onClick: () => void) => (
+    <button className="btn btn-icon" onClick={onClick} disabled={busy} aria-label="Refresh" title="Refresh from Meta">
+      <RefreshCw className={busy ? "spin" : undefined} />
+    </button>
   );
 
   const noPages = pages?.length === 0;
@@ -313,7 +321,6 @@ function App({ userName }: { userName: string }) {
             <div>
               <h1 className="page-title">Post comments</h1>
               <p className="page-sub">{postsMode === "inbox" ? "Every new comment across your Instagram and Facebook posts, in one place." : "Every comment on your organic posts, sorted into Enquiry, Positive and Negative."}</p>
-              {fetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {fetchedAt}</div>}
             </div>
             <div className="controls">
               <SelectPill icon={<Store />} label="Page" title={page?.name} value={pageId} disabled={!pages?.length}
@@ -326,21 +333,19 @@ function App({ userName }: { userName: string }) {
                 {noPages && <option>No Pages connected</option>}
                 {pages?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </SelectPill>
-              {postsMode === "inbox" ? daysSeg : (
-                <label className="pill dates" aria-label="Date range">
-                  <CalendarDays />
-                  <input type="date" value={since} max={until} onChange={(e) => e.target.value && setSince(e.target.value)} aria-label="From" />
-                  <span className="dash">–</span>
-                  <input type="date" value={until} min={since} max={iso(new Date())} onChange={(e) => e.target.value && setUntil(e.target.value)} aria-label="To" />
-                </label>
-              )}
-              <button className="btn btn-icon" onClick={() => { if (postsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadPosts(); setPanelNonce((n) => n + 1); } }} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
-                <RefreshCw className={postsBusy ? "spin" : undefined} />
-              </button>
             </div>
           </header>
 
-          <ModeTabs mode={postsMode} setMode={(m) => { setPostsMode(m); if (m === "inbox") setTarget(null); }} listLabel="By post" />
+          <div className="filterbar">
+            <ModeTabs mode={postsMode} setMode={(m) => { setPostsMode(m); if (m === "inbox") setTarget(null); }} listLabel="By post" />
+            <span className="spacer" />
+            {postsMode === "inbox" ? (<>{daysSeg}{customRange}</>) : (
+              <DateRange from={since} to={until} active label="Dates" maxDaysBack={365}
+                onApply={(f, t) => { setSince(f); setUntil(t); }} />
+            )}
+            {refreshBtn(postsBusy || !page, () => { if (postsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadPosts(); setPanelNonce((n) => n + 1); } })}
+          </div>
+
           <AccessCallout pages={pages} page={page} missingPermissions={missingPermissions} />
           {accountsError && <div className="callout danger"><div className="callout-main"><div className="callout-tag">Error</div><div className="callout-body">{accountsError}</div></div></div>}
 
@@ -411,7 +416,6 @@ function App({ userName }: { userName: string }) {
             <div>
               <h1 className="page-title">Ad comments</h1>
               <p className="page-sub">{adsMode === "inbox" ? "Every new comment across all your ads, in one place." : "Comments on the posts behind your ads, where most complaints and spam land."}</p>
-              {adsFetchedAt && <div className="page-meta"><span className="live-dot" />Live from Meta · fetched at {adsFetchedAt}</div>}
             </div>
             <div className="controls">
               <SelectPill icon={<Wallet />} label="Ad account" title={adAccounts?.find((a) => a.id === adAccountId)?.name} value={adAccountId} disabled={!adAccounts?.length} onChange={(v) => { setAdAccountId(v); setTarget(null); setAdId(""); }}>
@@ -419,22 +423,20 @@ function App({ userName }: { userName: string }) {
                 {adAccounts?.length === 0 && <option>No ad accounts connected</option>}
                 {adAccounts?.map((a) => <option key={a.id} value={a.id}>{a.name}{a.active ? "" : " (inactive)"}</option>)}
               </SelectPill>
-              {adsMode === "inbox" && (
-                <>
-                  <div className="seg" role="group" aria-label="Ad status">
-                    <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active</button>
-                    <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>+ Paused</button>
-                  </div>
-                  {daysSeg}
-                </>
-              )}
-              <button className="btn btn-icon" onClick={() => { if (adsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadAds(undefined, true); setPanelNonce((n) => n + 1); } }} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
-                <RefreshCw className={adsBusy ? "spin" : undefined} />
-              </button>
             </div>
           </header>
 
-          <ModeTabs mode={adsMode} setMode={(m) => { setAdsMode(m); if (m === "inbox") { setTarget(null); setAdId(""); } }} listLabel="By ad" />
+          <div className="filterbar">
+            <ModeTabs mode={adsMode} setMode={(m) => { setAdsMode(m); if (m === "inbox") { setTarget(null); setAdId(""); } }} listLabel="By ad" />
+            <span className="spacer" />
+            <div className="seg" role="group" aria-label="Ad status">
+              <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")} title="Delivering, in review or with issues">Active</button>
+              <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")} title="Also ads paused directly or through their campaign or ad set">+ Paused</button>
+            </div>
+            {adsMode === "inbox" && (<>{daysSeg}{customRange}</>)}
+            {refreshBtn(adsBusy || !adAccountId, () => { if (adsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadAds(undefined, true); setPanelNonce((n) => n + 1); } })}
+          </div>
+
           <AccessCallout pages={pages} page={undefined} missingPermissions={missingPermissions} />
 
           {adAccounts?.length === 0 ? (
@@ -454,10 +456,6 @@ function App({ userName }: { userName: string }) {
               <section className="card list-card" aria-label="Ads">
                 <div className="list-head">
                   <h3>Ads <span className="count-pill">{ads ? `· ${readableAds.length}${adsNext ? "+" : ""}` : ""}</span></h3>
-                  <div className="seg sm" role="group" aria-label="Ad status">
-                    <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active</button>
-                    <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>Active + paused</button>
-                  </div>
                 </div>
                 {ads && lockedAds.length > 0 && (
                   <div className="list-sub">
@@ -473,7 +471,7 @@ function App({ userName }: { userName: string }) {
                   {!ads && !adsError && <ListSkeleton />}
                   {ads && readableAds.length === 0 && !showLocked && !adsError && (
                     <Empty small icon={<Megaphone />} title={ads.length ? "No readable ads here" : "No ads with this status"}>
-                      {ads.length ? "All ads in this list run from partner accounts. Turn on “Show” above to see why." : adStatus === "active" ? "Try “Active + paused”." : undefined}
+                      {ads.length ? "All ads in this list run from partner accounts. Turn on “Show” above to see why." : adStatus === "active" ? "Try “+ Paused”." : undefined}
                     </Empty>
                   )}
                   {shownAds.map((ad) => {
@@ -485,7 +483,7 @@ function App({ userName }: { userName: string }) {
                         {ad.image ? <img className="thumb" src={ad.image} alt="" loading="lazy" /> : <span className="thumb"><Megaphone /></span>}
                         <span className="post-body">
                           <span className="post-meta">
-                            <span className={`status ${ad.status}`}>{ad.status === "ACTIVE" ? "Active" : "Paused"}</span>·
+                            <span className={`status ${statusKind(ad.status)}`} title={ad.status}>{statusLabel(ad.status)}</span>·
                             <span className="ad-places">
                               {ad.instagram && <Instagram />}{ad.facebook && <Facebook />}
                             </span>·
@@ -523,6 +521,15 @@ function App({ userName }: { userName: string }) {
       )}
     </Shell>
   );
+}
+
+/** Plain-English ad status. "Campaign paused" etc. are ads Meta stopped because their campaign or ad set was paused. */
+function statusLabel(s: string) {
+  return ({ ACTIVE: "Active", WITH_ISSUES: "Active · issues", IN_PROCESS: "Processing", PENDING_REVIEW: "In review",
+    PAUSED: "Paused", CAMPAIGN_PAUSED: "Campaign paused", ADSET_PAUSED: "Ad set paused" } as Record<string, string>)[s] || s.toLowerCase();
+}
+function statusKind(s: string) {
+  return s === "ACTIVE" ? "ACTIVE" : s === "WITH_ISSUES" || s === "PENDING_REVIEW" || s === "IN_PROCESS" ? "WARN" : "";
 }
 
 type Placement = { platform: "instagram" | "facebook"; comments: number | null };
