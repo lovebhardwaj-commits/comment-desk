@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { MessagesSquare, Megaphone, PanelLeft, LogOut, Menu, Activity } from "lucide-react";
 import { initials } from "./ui";
 import { cacheClear } from "./cache";
+import LogPanel from "./LogPanel";
 
 export type View = "posts" | "ads";
 
@@ -60,6 +61,7 @@ export default function Shell({ view, onView, userName, children }: { view: View
         </nav>
 
         <div className="sidebar-bottom">
+          <nav className="nav"><LogPanel collapsed={collapsed} /></nav>
           <div className="user" title={userName}>
             <span className="avatar">{initials(userName)}</span>
             <span className="user-name">{userName}</span>

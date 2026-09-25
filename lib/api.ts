@@ -7,8 +7,11 @@ export async function handle(fn: () => Promise<unknown>) {
     return NextResponse.json(await fn());
   } catch (e: any) {
     if (e instanceof AuthError) return NextResponse.json({ error: e.message, auth: true }, { status: 401 });
-    if (e instanceof GraphError) return NextResponse.json({ error: e.message, code: e.code }, { status: 400 });
-    console.error(e);
+    if (e instanceof GraphError) {
+      console.error(`[api] Meta error ${e.code ?? ""}: ${e.message}`);
+      return NextResponse.json({ error: e.message, code: e.code }, { status: 400 });
+    }
+    console.error("[api]", e);
     return NextResponse.json({ error: e?.message || "Something went wrong" }, { status: 500 });
   }
 }

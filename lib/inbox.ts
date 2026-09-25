@@ -1,4 +1,5 @@
-import { graphAll, getPages, pageToken } from "./graph";
+import { graph, graphAll, getPages, pageToken } from "./graph";
+import { classify } from "./metaError";
 import { listAds } from "./ads";
 import { ACTIVE_STATUSES, PAUSED_STATUSES } from "./adStatus";
 import { fmtShort } from "./format";
@@ -14,8 +15,16 @@ export type TargetStats = {
   /** More posts/ads with comments existed than the inbox reads in one go. */
   capped: boolean; withComments: number;
   /** Instagram ad posts: how many were included, on creator accounts (partnership ads), or unreadable (with Meta's reason). */
-  ig?: { included: number; partner: number; unreadable: number; error?: string; noComments: number };
-  fb?: { included: number; notConnected: number; unreadable: number; noComments: number };
+  ig?: {
+    included: number; partner: number; unreadable: number; error?: string; noComments: number;
+    /** Plain-English reason for the unreadable ones, and a sample of their ids and Meta's raw message for the log. */
+    reason?: string; unreadableIds?: string[];
+  };
+  fb?: {
+    included: number; notConnected: number; unreadable: number; noComments: number; reason?: string; unreadableIds?: string[];
+    /** The Pages behind ads that this login can't open, so the right Page can be connected. */
+    missingPages?: { id: string; name?: string; ads: number }[];
+  };
 };
 
 /** The posts (or ad posts) that have comments, with their current comment count.
@@ -30,6 +39,8 @@ export async function collectTargets(
 
   if (q.source === "ads") {
     const seen = new Set<string>();
+    const missing = new Map<string, number>();
+    let fbError = "";
     const stats: TargetStats = {
       checked: 0, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: false, withComments: 0,
       ig: { included: 0, partner: 0, unreadable: 0, noComments: 0 }, fb: { included: 0, notConnected: 0, unreadable: 0, noComments: 0 },
@@ -51,13 +62,19 @@ export async function collectTargets(
           const ig = ad.instagram, fb = ad.facebook;
           if (ig?.unreadable || fb?.unreadable) stats.unreadable++;
           if (ig) {
-            if (ig.unreadable) { stats.ig!.unreadable++; stats.ig!.error ||= ig.error; }
+            if (ig.unreadable) {
+              stats.ig!.unreadable++; stats.ig!.error ||= ig.error;
+              if ((stats.ig!.unreadableIds ||= []).length < 20) stats.ig!.unreadableIds.push(ig.mediaId);
+            }
             else if (!ig.owned) stats.ig!.partner++;
             else if (!(ig.comments > 0)) stats.ig!.noComments++;
           }
           if (fb) {
-            if (!fb.owned) stats.fb!.notConnected++;
-            else if (fb.unreadable) stats.fb!.unreadable++;
+            if (!fb.owned) { stats.fb!.notConnected++; missing.set(fb.pageId, (missing.get(fb.pageId) || 0) + 1); }
+            else if (fb.unreadable) {
+              stats.fb!.unreadable++; fbError ||= fb.error;
+              if ((stats.fb!.unreadableIds ||= []).length < 20) stats.fb!.unreadableIds.push(fb.postId);
+            }
             else if (!(fb.comments > 0)) stats.fb!.noComments++;
           }
           if (ig?.owned && !ig.unreadable && ig.comments > 0 && !seen.has(ig.mediaId)) {
@@ -78,6 +95,14 @@ export async function collectTargets(
     }
     stats.withComments = targets.length;
     if (targets.length > MAX_TARGETS) stats.capped = true;
+    if (stats.ig!.error) stats.ig!.reason = classify(stats.ig!.error).text;
+    if (fbError) stats.fb!.reason = classify(fbError).text;
+    if (missing.size) {
+      // Look up the names of Pages this login can't manage (public Page names are usually readable).
+      const ids = [...missing.keys()].slice(0, 10);
+      const names: Record<string, any> = await graph<any>("", userToken, { ids: ids.join(","), fields: "name" }).catch(() => ({}));
+      stats.fb!.missingPages = ids.map((id) => ({ id, name: names[id]?.name, ads: missing.get(id)! })).sort((a, b) => b.ads - a.ads);
+    }
     return { targets: targets.slice(0, MAX_TARGETS), stats };
   }
 
