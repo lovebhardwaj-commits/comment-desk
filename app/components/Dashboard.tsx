@@ -65,7 +65,11 @@ function App({ userName }: { userName: string }) {
   // 7-day inbox: the default way in, so every comment can be handled in one pass.
   const [postsMode, setPostsMode] = useState<"inbox" | "list">("inbox");
   const [adsMode, setAdsMode] = useState<"inbox" | "list">("inbox");
-  const [days, setDays] = useState(7);
+  // Time window for "All comments": a preset (anchored to when it was picked or refreshed) or a custom date range.
+  const [preset, setPreset] = useState<1 | 7 | 14 | "custom">(7);
+  const [stamp, setStamp] = useState(() => Date.now());
+  const [rangeFrom, setRangeFrom] = useState(iso(new Date(Date.now() - 7 * 864e5)));
+  const [rangeTo, setRangeTo] = useState(iso(new Date()));
   const [inboxNonce, setInboxNonce] = useState(0);
   const [panelNonce, setPanelNonce] = useState(0);
   const pendingTarget = useRef<Target | null>(null);
@@ -97,6 +101,17 @@ function App({ userName }: { userName: string }) {
   }, [view, adAccounts]);
 
   const page = useMemo(() => pages?.find((p) => p.id === pageId), [pages, pageId]);
+
+  const win = useMemo(() => {
+    if (preset !== "custom") {
+      const label = preset === 1 ? "last 24 hours" : `last ${preset} days`;
+      return { sinceMs: stamp - preset * 864e5, untilMs: stamp + 60_000, label, phrase: `in the ${label}`, id: `p${preset}` };
+    }
+    const from = new Date(`${rangeFrom}T00:00:00`).getTime();
+    const to = Math.min(new Date(`${rangeTo}T23:59:59.999`).getTime(), Date.now() + 60_000);
+    const f = (ms: number) => new Date(ms).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+    return { sinceMs: from, untilMs: to, label: `${f(from)} – ${f(to)}`, phrase: `between ${f(from)} and ${f(to)}`, id: `c${rangeFrom}_${rangeTo}` };
+  }, [preset, stamp, rangeFrom, rangeTo]);
 
   /** Loads posts. Shows the cached list straight away (if any), then replaces it with Meta's current list. */
   const loadPosts = useCallback(async (after?: string) => {
@@ -228,11 +243,12 @@ function App({ userName }: { userName: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ads, view, adsMode]);
 
-  /** Inbox specs: every comment from the last N days, for the brand's posts or the ad account's ads. */
+  /** Inbox specs: every comment in the chosen window, for the brand's posts or the ad account's ads. */
   const postsInbox = page ? {
-    key: `inbox:posts:${page.id}:${days}`, cacheKey: `inbox:posts:${page.id}`, days, refresh: inboxNonce,
-    scope: `${page.name} · ${page.instagram ? "Instagram and Facebook" : "Facebook"} posts from the last 60 days`,
-    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "posts", pageId: page.id })}`,
+    key: `inbox:posts:${page.id}:${win.id}`, cacheKey: `inbox:posts:${page.id}`, refresh: inboxNonce,
+    sinceMs: win.sinceMs, untilMs: win.untilMs, label: win.label, phrase: win.phrase,
+    scope: `${page.name} · ${page.instagram ? "Instagram and Facebook" : "Facebook"} posts`,
+    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "posts", pageId: page.id, since: String(win.sinceMs) })}`,
     onFetched: () => setFetchedAt(timeNow()),
     onOpen: (src: Src) => {
       // Jump to this post in the "By post" view.
@@ -244,9 +260,10 @@ function App({ userName }: { userName: string }) {
   } : undefined;
   const adAccountName = adAccounts?.find((a) => a.id === adAccountId)?.name || "";
   const adsInbox = adAccountId ? {
-    key: `inbox:ads:${adAccountId}:${adStatus}:${days}`, cacheKey: `inbox:ads:${adAccountId}:${adStatus}`, days, noun: "ad" as const, refresh: inboxNonce,
+    key: `inbox:ads:${adAccountId}:${adStatus}:${win.id}`, cacheKey: `inbox:ads:${adAccountId}:${adStatus}`, noun: "ad" as const, refresh: inboxNonce,
+    sinceMs: win.sinceMs, untilMs: win.untilMs, label: win.label, phrase: win.phrase,
     scope: `${adAccountName} · ${adStatus === "active" ? "active" : "active and paused"} ads on Instagram and Facebook`,
-    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus })}`,
+    targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus, since: String(win.sinceMs) })}`,
     onFetched: () => setAdsFetchedAt(timeNow()),
     onOpen: (src: Src) => {
       pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: src.pageId,
@@ -265,12 +282,25 @@ function App({ userName }: { userName: string }) {
     </div>
   );
 
-  const DaysSeg = () => (
-    <div className="seg" role="group" aria-label="Time window">
-      {[1, 7, 14].map((d) => (
-        <button key={d} aria-pressed={days === d} onClick={() => setDays(d)}>{d === 1 ? "24 hours" : `${d} days`}</button>
-      ))}
-    </div>
+  const today = iso(new Date());
+  const minDay = iso(new Date(Date.now() - 90 * 864e5));
+  // Rendered as an element (not a component) so the date inputs keep focus while you pick dates.
+  const daysSeg = (
+    <>
+      <div className="seg" role="group" aria-label="Time window">
+        {([1, 7, 14] as const).map((d) => (
+          <button key={d} aria-pressed={preset === d} onClick={() => { setPreset(d); setStamp(Date.now()); }}>{d === 1 ? "24 hours" : `${d} days`}</button>
+        ))}
+        <button aria-pressed={preset === "custom"} onClick={() => setPreset("custom")}><CalendarDays />Custom</button>
+      </div>
+      {preset === "custom" && (
+        <label className="pill dates" aria-label="Custom date range">
+          <input type="date" value={rangeFrom} min={minDay} max={rangeTo} onChange={(e) => e.target.value && setRangeFrom(e.target.value)} aria-label="From" />
+          <span className="dash">–</span>
+          <input type="date" value={rangeTo} min={rangeFrom} max={today} onChange={(e) => e.target.value && setRangeTo(e.target.value)} aria-label="To" />
+        </label>
+      )}
+    </>
   );
 
   const noPages = pages?.length === 0;
@@ -296,7 +326,7 @@ function App({ userName }: { userName: string }) {
                 {noPages && <option>No Pages connected</option>}
                 {pages?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </SelectPill>
-              {postsMode === "inbox" ? <DaysSeg /> : (
+              {postsMode === "inbox" ? daysSeg : (
                 <label className="pill dates" aria-label="Date range">
                   <CalendarDays />
                   <input type="date" value={since} max={until} onChange={(e) => e.target.value && setSince(e.target.value)} aria-label="From" />
@@ -304,7 +334,7 @@ function App({ userName }: { userName: string }) {
                   <input type="date" value={until} min={since} max={iso(new Date())} onChange={(e) => e.target.value && setUntil(e.target.value)} aria-label="To" />
                 </label>
               )}
-              <button className="btn btn-icon" onClick={() => { if (postsMode === "inbox") setInboxNonce((n) => n + 1); else { loadPosts(); setPanelNonce((n) => n + 1); } }} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
+              <button className="btn btn-icon" onClick={() => { if (postsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadPosts(); setPanelNonce((n) => n + 1); } }} disabled={postsBusy || !page} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={postsBusy ? "spin" : undefined} />
               </button>
             </div>
@@ -395,10 +425,10 @@ function App({ userName }: { userName: string }) {
                     <button aria-pressed={adStatus === "active"} onClick={() => setAdStatus("active")}>Active</button>
                     <button aria-pressed={adStatus === "all"} onClick={() => setAdStatus("all")}>+ Paused</button>
                   </div>
-                  <DaysSeg />
+                  {daysSeg}
                 </>
               )}
-              <button className="btn btn-icon" onClick={() => { if (adsMode === "inbox") setInboxNonce((n) => n + 1); else { loadAds(undefined, true); setPanelNonce((n) => n + 1); } }} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
+              <button className="btn btn-icon" onClick={() => { if (adsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadAds(undefined, true); setPanelNonce((n) => n + 1); } }} disabled={adsBusy || !adAccountId} aria-label="Refresh" title="Refresh from Meta">
                 <RefreshCw className={adsBusy ? "spin" : undefined} />
               </button>
             </div>
