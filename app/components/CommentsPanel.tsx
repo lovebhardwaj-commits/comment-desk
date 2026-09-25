@@ -32,10 +32,24 @@ type Sync = {
   phase: "loading" | "checking" | "updating" | "ready" | "error";
   cachedAt?: number; checkedAt?: number; total?: number; loaded?: number; changed?: number; checked?: number;
   failed?: number; skipped?: number; withNew?: number; error?: string;
-  stats?: { checked: number; unreadable: number; capped: boolean; withComments: number };
+  stats?: {
+    checked: number; unreadable: number; capped: boolean; withComments: number;
+    ig?: { included: number; partner: number; unreadable: number; error?: string; noComments: number };
+    fb?: { included: number; notConnected: number; unreadable: number; noComments: number };
+  };
+  /** Meta's count vs what actually came back, when far apart (comments Meta counts but won't return). */
+  gap?: { reported: number; got: number };
 };
 type InboxCache = { byObj: Record<string, Comment[]>; counts: Record<string, number>; since: number; results: Record<string, Result> };
 type PostCache = { count: number | null; comments: Comment[]; results: Record<string, Result> };
+
+// When each view last checked Meta, for this browser tab. Switching views or tabs within 2 minutes reuses the
+// result instead of asking Meta again; Refresh always asks.
+const RECHECK_MS = 2 * 60 * 1000;
+const lastChecked = new Map<string, { at: number; sync: Sync }>();
+
+/** A saved copy with far fewer comments than Meta reports is not trustworthy (a failed or partial fetch). */
+const looksIncomplete = (got: number, reported?: number | null) => !!reported && reported - got > 3 && got < reported * 0.5;
 
 /** Reads an NDJSON stream line by line. */
 async function readStream(url: string, body: unknown, onLine: (o: any) => void) {
@@ -97,6 +111,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [sort, setSort] = useState<"newest" | "oldest">("newest");
   const [showBrand, setShowBrand] = useState(false);
   const [showHidden, setShowHidden] = useState(true);
+  const [plat, setPlat] = useState<"all" | "instagram" | "facebook">("all");
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -151,6 +166,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   // Earliest moment the cached comments cover. If the window starts earlier, everything is refetched.
   const cachedSince = useRef(Number.MAX_SAFE_INTEGER);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const incomplete = useRef(false);
   const cacheKey = inbox ? inbox.cacheKey : target ? `obj:${target.platform}:${target.objectId}` : "";
 
   /** Saves what's on screen (comments, hidden state, categories) to the browser cache, debounced. */
@@ -166,7 +182,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         for (const c of list) if (c.src) (grouped[c.src.objectId] ||= []).push(c);
         cacheSet(cacheKey, { byObj: grouped, counts: objCounts.current, since: cachedSince.current, results } satisfies InboxCache);
       } else {
-        cacheSet(cacheKey, { count: target?.count ?? null, comments: list, results } satisfies PostCache);
+        // An incomplete copy is saved without Meta's count, so the next open fetches again instead of trusting it.
+        cacheSet(cacheKey, { count: incomplete.current ? null : target?.count ?? null, comments: list, results } satisfies PostCache);
       }
     }, 600);
   }
@@ -183,6 +200,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         resultsRef.current = c.value.results; setResults(c.value.results);
         setComments(flat());
         hadCache = true;
+        const recent = lastChecked.get(spec.key);
+        if (!full && recent && Date.now() - recent.at < RECHECK_MS && cachedSince.current <= spec.sinceMs + 60_000) {
+          setSync({ ...recent.sync, cachedAt: c.at });
+          categorise(flat());
+          return;
+        }
         setSync({ phase: "checking", cachedAt: c.at });
       }
     }
@@ -195,8 +218,14 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       const changed = targets.filter((t) => full || needLonger || objCounts.current[t.objectId] !== t.count || !byObj.current[t.objectId]);
       const base = { checked: targets.length, checkedAt: Date.now(), stats };
       if (!changed.length) {
+        // Nothing needed fetching, so the saved copy covers the whole window.
+        if (full || needLonger) cachedSince.current = spec.sinceMs;
         setComments(flat());
-        setSync((s) => ({ ...s, ...base, phase: "ready", changed: 0, withNew: Object.values(byObj.current).filter((l) => l.length).length }));
+        setSync((s) => {
+          const n: Sync = { ...s, ...base, phase: "ready", changed: 0, withNew: Object.values(byObj.current).filter((l) => l.length).length };
+          lastChecked.set(spec.key, { at: Date.now(), sync: n });
+          return n;
+        });
         categorise(flat());
         spec.onFetched?.();
         persistSoon();
@@ -220,7 +249,11 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         if (m.type !== "done") setSync((s) => ({ ...s, loaded, failed, skipped }));
       });
       if (full || needLonger) cachedSince.current = spec.sinceMs;
-      setSync((s) => ({ ...s, phase: "ready", changed: changed.length - failed - skipped, failed, skipped, checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length }));
+      setSync((s) => {
+        const n: Sync = { ...s, phase: "ready", changed: changed.length - failed - skipped, failed, skipped, checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length };
+        lastChecked.set(spec.key, { at: Date.now(), sync: n });
+        return n;
+      });
       spec.onFetched?.();
       persistSoon();
     } catch (e: any) {
@@ -240,7 +273,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         hadCache = true;
         resultsRef.current = c.value.results; setResults(c.value.results);
         setComments(c.value.comments);
-        const same = t.count != null && c.value.count === t.count;
+        // Reuse the saved copy only if Meta's count hasn't moved AND the copy isn't suspiciously short.
+        const same = t.count != null && c.value.count === t.count && !looksIncomplete(c.value.comments.length, t.count);
         setSync({ phase: same ? "ready" : "checking", cachedAt: c.at, checkedAt: same ? c.at : undefined, changed: 0 });
         if (same) { categorise(c.value.comments); return; }
       }
@@ -250,7 +284,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       const d = await api<{ comments: Comment[] }>(`/api/comments?${new URLSearchParams({ platform: t.platform, objectId: t.objectId, pageId: t.pageId, brandUsername: t.brandUsername })}`);
       setComments(d.comments);
       commentsRef.current = d.comments;
-      setSync({ phase: "ready", checkedAt: Date.now(), changed: 1 });
+      const gap = looksIncomplete(d.comments.length, t.count) ? { reported: t.count!, got: d.comments.length } : undefined;
+      incomplete.current = !!gap;
+      setSync({ phase: "ready", checkedAt: Date.now(), changed: 1, gap });
       categorise(d.comments);
       persistSoon();
     } catch (e: any) {
@@ -418,14 +454,16 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   // Comments inside the chosen time window (the cache may hold a longer window).
   const sinceMs = inbox ? inbox.sinceMs : 0;
   const untilMs = inbox ? inbox.untilMs : 0;
+  const platOf = (c: Comment) => c.src?.platform || target?.platform || "facebook";
   const inWin = (c: Comment) => {
+    if (plat !== "all" && platOf(c) !== plat) return false;
     if (!inbox) return true;
     const t = Date.parse(c.time);
     return t >= sinceMs && t <= untilMs;
   };
   // Every customer comment in the window, and the ones still public ("open"). KPIs count open comments only:
   // a hidden comment has already been dealt with.
-  const allCustomer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, sinceMs, untilMs]);
+  const allCustomer = useMemo(() => (comments || []).filter((c) => !c.isBrand && inWin(c)), [comments, sinceMs, untilMs, plat]);
   const customer = useMemo(() => allCustomer.filter((c) => !c.hidden), [allCustomer]);
 
   const counts = useMemo(() => {
@@ -447,6 +485,19 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
     return c;
   }, [allCustomer, results]);
+
+  // Open comments per platform in the window, so it's obvious whether Instagram and Facebook are both there.
+  const platCounts = useMemo(() => {
+    const c = { instagram: 0, facebook: 0 };
+    if (!inbox) return c;
+    for (const x of comments || []) {
+      if (x.isBrand || x.hidden) continue;
+      const t = Date.parse(x.time);
+      if (t < sinceMs || t > untilMs) continue;
+      c[platOf(x)]++;
+    }
+    return c;
+  }, [comments, sinceMs, untilMs]);
 
   // Which comments the brand has already replied to.
   const replied = useMemo(() => {
@@ -510,7 +561,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       for (const r of list) if (r.parentId === t.id) out.push(r);
     }
     return out;
-  }, [comments, results, filter, query, sort, showBrand, showHidden, moving, sinceMs, untilMs]);
+  }, [comments, results, filter, query, sort, showBrand, showHidden, moving, sinceMs, untilMs, plat]);
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
@@ -524,9 +575,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
 
-  // Fetching overlay: while Meta is being checked or new comments are loading, the (possibly stale) list is
-  // dimmed and can't be acted on, and a card in the middle says what's happening.
-  const busyNow = sync.phase === "checking" || sync.phase === "updating" || sync.phase === "loading";
+  // Fetching overlay: while new comments are loading, the list is dimmed and can't be acted on, and a card in the
+  // middle says what's happening. A quick "anything new?" check on saved data doesn't block the screen (it shows in the status line);
+  // loading new comments does, so nobody acts on data that's about to change.
+  const busyNow = sync.phase === "updating" || sync.phase === "loading" || (sync.phase === "checking" && !comments?.length);
   const nounOf = inbox?.noun || "post";
   const busyTitle = sync.phase === "checking" ? "Checking Meta for new comments…" : "Fetching comments from Meta…";
   const busyDetail = sync.phase === "checking"
@@ -568,6 +620,15 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
             <SyncLine sync={sync} noun="post" single />
           </div>
+          {sync.gap && (
+            <div className="limit-notes">
+              <div className="limit-note"><Info />
+                <span>Meta reports {sync.gap.reported} comments on this {target!.kind === "ad" ? "ad" : "post"}, but only {sync.gap.got} came back.{" "}
+                  <a href={`/api/diagnose/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId })}`} target="_blank" rel="noreferrer">See what Meta returned</a>
+                </span>
+              </div>
+            </div>
+          )}
           {headerExtra && <div className="hero-switch">{headerExtra}</div>}
         </div>
       </div>
@@ -625,6 +686,13 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <span className="sr">Search comments</span>
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search comments…" />
         </label>
+        {inbox && (
+          <div className="seg" role="group" aria-label="Platform">
+            <button aria-pressed={plat === "all"} onClick={() => setPlat("all")}>All</button>
+            <button aria-pressed={plat === "instagram"} onClick={() => setPlat("instagram")}><Instagram />{platCounts.instagram}</button>
+            <button aria-pressed={plat === "facebook"} onClick={() => setPlat("facebook")}><Facebook />{platCounts.facebook}</button>
+          </div>
+        )}
         <div className="seg" role="group" aria-label="Sort">
           <button aria-pressed={sort === "newest"} onClick={() => setSort("newest")}>Newest</button>
           <button aria-pressed={sort === "oldest"} onClick={() => setSort("oldest")}>Oldest</button>
@@ -744,7 +812,13 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
               </div>
               <div style={{ minWidth: 0 }}>
                 <div className="c-top">
-                  <span className="c-author">{c.author || "Unknown"}</span>
+                  {c.author ? <span className="c-author">{c.author}</span> : (
+                    <span className="c-author anon" title={platOf(c) === "facebook"
+                      ? "Meta didn't say who wrote this Facebook comment. This usually means the app hasn't passed Meta's App Review yet; until then Meta only names people who have a role on the app."
+                      : "Meta didn't return a username for this comment."}>
+                      {platOf(c) === "facebook" ? "Facebook user" : "Instagram user"}<Info />
+                    </span>
+                  )}
                   <span>{fmtDateTime(c.time)}</span>
                   {c.isBrand && <span className="tag tag-brand">Brand</span>}
                   {c.hidden && (verified.has(c.id)
@@ -806,10 +880,22 @@ function LimitNotes({ sync, noun }: { sync: Sync; noun: string }) {
   if (!s || sync.phase !== "ready") return null;
   const notes: string[] = [];
   if (s.capped) notes.push(`${s.withComments} ${noun}s have comments, more than can be read at once: only ${sync.checked} were read${noun === "post" ? " (those with the most comments)" : " (active ads first)"}. Narrow the time window${noun === "ad" ? " or switch to Active only" : ""} to cover the rest.`);
-  if (s.unreadable) notes.push(`${s.unreadable} ${noun}${s.unreadable === 1 ? "" : "s"} couldn't be read (partnership ads on a creator's account, or missing access).`);
+  if (s.ig && s.ig.partner) notes.push(`${s.ig.partner} Instagram ad post${s.ig.partner === 1 ? " is" : "s are"} on a creator's account (partnership ads), so Meta doesn't let the brand read ${s.ig.partner === 1 ? "its" : "their"} comments.`);
+  if (s.ig && s.ig.unreadable) notes.push(`${s.ig.unreadable} Instagram ad post${s.ig.unreadable === 1 ? "" : "s"} couldn't be read. Meta said: ${s.ig.error || "no reason given"}`);
+  if (s.fb && s.fb.notConnected) notes.push(`${s.fb.notConnected} Facebook ad post${s.fb.notConnected === 1 ? " is" : "s are"} on a Page that isn't connected. Reconnect and tick that Page to include ${s.fb.notConnected === 1 ? "it" : "them"}.`);
+  if (!s.ig && s.unreadable) notes.push(`${s.unreadable} ${noun}${s.unreadable === 1 ? "" : "s"} couldn't be read.`);
   if (sync.skipped) notes.push(`${sync.skipped} ${noun}${sync.skipped === 1 ? " was" : "s were"} skipped to stay within the time limit. Press refresh to load ${sync.skipped === 1 ? "it" : "them"}.`);
-  if (!notes.length) return null;
-  return <div className="limit-notes">{notes.map((n) => <div key={n} className="limit-note"><Info />{n}</div>)}</div>;
+  // A plain statement of what was covered, so "are Instagram ads included?" never needs guessing.
+  const coverage = s.ig && s.fb
+    ? `Checked ${s.checked} ads: comments read from ${s.ig.included} Instagram and ${s.fb.included} Facebook ad post${s.fb.included === 1 ? "" : "s"}.`
+    : "";
+  if (!notes.length && !coverage) return null;
+  return (
+    <div className="limit-notes">
+      {coverage && <div className="coverage-note">{coverage}</div>}
+      {notes.map((n) => <div key={n} className="limit-note"><Info />{n}</div>)}
+    </div>
+  );
 }
 
 /** One line saying how fresh the data is: saved copy, checking, updating, or up to date. */
