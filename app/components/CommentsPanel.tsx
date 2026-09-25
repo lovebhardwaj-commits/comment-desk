@@ -4,6 +4,7 @@ import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, Co
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
+import { logEvent } from "./log";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -34,9 +35,13 @@ type Sync = {
   failed?: number; skipped?: number; withNew?: number; error?: string;
   stats?: {
     checked: number; unreadable: number; capped: boolean; withComments: number;
-    ig?: { included: number; partner: number; unreadable: number; error?: string; noComments: number };
-    fb?: { included: number; notConnected: number; unreadable: number; noComments: number };
+    ig?: { included: number; partner: number; unreadable: number; error?: string; noComments: number; reason?: string; unreadableIds?: string[] };
+    fb?: { included: number; notConnected: number; unreadable: number; noComments: number; reason?: string; unreadableIds?: string[]; missingPages?: { id: string; name?: string; ads: number }[] };
   };
+  /** Posts where Meta counts comments but returned none at all (withheld), by platform. */
+  withheld?: { instagram: number; facebook: number };
+  /** Plain-English reasons for posts whose comments failed to load. */
+  failReasons?: string[];
   /** Meta's count vs what actually came back, when far apart (comments Meta counts but won't return). */
   gap?: { reported: number; got: number };
 };
@@ -217,6 +222,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       const needLonger = cachedSince.current > spec.sinceMs + 60_000;
       const changed = targets.filter((t) => full || needLonger || objCounts.current[t.objectId] !== t.count || !byObj.current[t.objectId]);
       const base = { checked: targets.length, checkedAt: Date.now(), stats };
+      if (stats?.ig?.unreadable) logEvent({ level: "warn", area: "instagram ads", message: `${stats.ig.unreadable} Instagram ad posts couldn't be read (${stats.ig.reason || "unknown reason"})`, details: { mediaIds: stats.ig.unreadableIds, meta: stats.ig.error } });
+      if (stats?.fb?.unreadable) logEvent({ level: "warn", area: "facebook ads", message: `${stats.fb.unreadable} Facebook ad posts couldn't be read (${stats.fb.reason || "unknown reason"})`, details: { postIds: stats.fb.unreadableIds } });
+      if (stats?.fb?.missingPages?.length) logEvent({ level: "warn", area: "facebook ads", message: `${stats.fb.notConnected} Facebook ad posts are on Pages this login can't open`, details: { pages: stats.fb.missingPages } });
       if (!changed.length) {
         // Nothing needed fetching, so the saved copy covers the whole window.
         if (full || needLonger) cachedSince.current = spec.sinceMs;
@@ -232,9 +240,11 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         return;
       }
       let loaded = 0, failed = 0, skipped = 0;
+      const withheld = { instagram: 0, facebook: 0 };
+      const failReasons = new Set<string>();
       setSync((s) => ({ ...s, ...base, phase: hadCache ? "updating" : "loading", total: changed.length, loaded: 0 }));
       if (!hadCache) setComments([]);
-      await readStream("/api/inbox/comments", { targets: changed.map(({ count, ...t }) => t), since: Math.min(spec.sinceMs, needLonger || full ? spec.sinceMs : cachedSince.current), until: Date.now() }, (m) => {
+      await readStream("/api/inbox/comments", { targets: changed, since: Math.min(spec.sinceMs, needLonger || full ? spec.sinceMs : cachedSince.current), until: Date.now() }, (m) => {
         if (m.type === "comments") {
           const t = byId.get(m.objectId)!;
           const { count, ...src } = t;
@@ -244,19 +254,31 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           loaded++;
           setComments(flat());
           categorise(fresh);
-        } else if (m.type === "failed") { failed++; loaded++; }
+        } else if (m.type === "withheld") {
+          const t = byId.get(m.objectId)!;
+          withheld[t.platform]++; loaded++;
+          byObj.current[m.objectId] = [];
+          objCounts.current[m.objectId] = -1; // not a real count, so the next check tries again
+          logEvent({ level: "error", area: `${t.platform} comments`, message: `Meta reports ${m.reported} comments on a ${t.platform === "facebook" ? "Facebook" : "Instagram"} ${t.kind} but returned none`, details: { objectId: t.objectId, pageId: t.pageId || undefined, ad: t.label, diagnose: `/api/diagnose/comments?platform=${t.platform}&objectId=${t.objectId}` } });
+        } else if (m.type === "failed") {
+          failed++; loaded++;
+          if (m.reason) failReasons.add(m.reason);
+          const t = byId.get(m.objectId);
+          logEvent({ level: "error", area: `${m.platform || t?.platform || ""} comments`, message: `Couldn't load comments (${m.reason || "error"})`, details: { objectId: m.objectId, ad: t?.label, meta: m.error } });
+        }
         else if (m.type === "skipped") { skipped++; loaded++; }
         if (m.type !== "done") setSync((s) => ({ ...s, loaded, failed, skipped }));
       });
       if (full || needLonger) cachedSince.current = spec.sinceMs;
       setSync((s) => {
-        const n: Sync = { ...s, phase: "ready", changed: changed.length - failed - skipped, failed, skipped, checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length };
+        const n: Sync = { ...s, phase: "ready", changed: changed.length - failed - skipped - withheld.instagram - withheld.facebook, failed, skipped, withheld, failReasons: [...failReasons], checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length };
         lastChecked.set(spec.key, { at: Date.now(), sync: n });
         return n;
       });
       spec.onFetched?.();
       persistSoon();
     } catch (e: any) {
+      logEvent({ level: "error", area: "inbox", message: `Couldn't check for new comments: ${e.message}`, details: { view: spec.key } });
       if (commentsRef.current) {
         setSync((s) => ({ ...s, phase: "error", error: e.message }));
         toast({ kind: "err", msg: `Couldn't check for new comments, showing saved ones: ${e.message}` });
@@ -286,6 +308,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       commentsRef.current = d.comments;
       const gap = looksIncomplete(d.comments.length, t.count) ? { reported: t.count!, got: d.comments.length } : undefined;
       incomplete.current = !!gap;
+      if (gap) logEvent({ level: "error", area: `${t.platform} comments`, message: `Meta reports ${gap.reported} comments on this ${t.kind || "post"} but returned ${gap.got}`, details: { objectId: t.objectId, pageId: t.pageId || undefined, title: t.title, diagnose: `/api/diagnose/comments?platform=${t.platform}&objectId=${t.objectId}` } });
       setSync({ phase: "ready", checkedAt: Date.now(), changed: 1, gap });
       categorise(d.comments);
       persistSoon();
@@ -372,7 +395,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const done = res.filter((r) => r.ok).map((r) => r.id);
     const failed = res.filter((r) => !r.ok);
     setSelected(new Set());
-    if (failed.length) toast({ kind: "err", msg: `${failed.length === res.length ? "Couldn't hide" : `${failed.length} couldn't be hidden`}: ${failed[0].error}` });
+    if (failed.length) {
+      toast({ kind: "err", msg: `${failed.length === res.length ? "Couldn't hide" : `${failed.length} couldn't be hidden`}: ${failed[0].error}` });
+      logEvent({ level: "error", area: "hide", message: `${failed.length} comment${failed.length === 1 ? "" : "s"} couldn't be hidden`, details: { failures: failed.slice(0, 20).map((f) => ({ id: f.id, error: f.error })) } });
+    }
     if (!done.length) return;
     const allVerified = res.filter((r) => r.ok).every((r) => r.verified);
     toast({
@@ -401,7 +427,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     setHideAllRun({ done: 0, total: ids.length });
     const res = await setHidden(ids, true, (done) => setHideAllRun({ done, total: ids.length }));
     setHideAllRun(null);
-    setHideAllResult({ hidden: res.filter((r) => r.ok).map((r) => r.id), failed: res.filter((r) => !r.ok) });
+    const bad = res.filter((r) => !r.ok);
+    if (bad.length) logEvent({ level: "error", area: "hide", message: `Hide all negative: ${bad.length} of ${res.length} couldn't be hidden`, details: { failures: bad.slice(0, 20).map((f) => ({ id: f.id, error: f.error })) } });
+    setHideAllResult({ hidden: res.filter((r) => r.ok).map((r) => r.id), failed: bad });
     setSelected(new Set());
   }
 
@@ -575,10 +603,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
 
-  // Fetching overlay: while new comments are loading, the list is dimmed and can't be acted on, and a card in the
-  // middle says what's happening. A quick "anything new?" check on saved data doesn't block the screen (it shows in the status line);
-  // loading new comments does, so nobody acts on data that's about to change.
-  const busyNow = sync.phase === "updating" || sync.phase === "loading" || (sync.phase === "checking" && !comments?.length);
+  // Fetching overlay: whenever the app is talking to Meta (checking or loading), the list is dimmed and can't be acted
+  // on, and a card in the middle says what's happening. Views checked in the last 2 minutes aren't re-checked at all.
+  const busyNow = sync.phase === "updating" || sync.phase === "loading" || sync.phase === "checking";
   const nounOf = inbox?.noun || "post";
   const busyTitle = sync.phase === "checking" ? "Checking Meta for new comments…" : "Fetching comments from Meta…";
   const busyDetail = sync.phase === "checking"
@@ -881,13 +908,20 @@ function LimitNotes({ sync, noun }: { sync: Sync; noun: string }) {
   const notes: string[] = [];
   if (s.capped) notes.push(`${s.withComments} ${noun}s have comments, more than can be read at once: only ${sync.checked} were read${noun === "post" ? " (those with the most comments)" : " (active ads first)"}. Narrow the time window${noun === "ad" ? " or switch to Active only" : ""} to cover the rest.`);
   if (s.ig && s.ig.partner) notes.push(`${s.ig.partner} Instagram ad post${s.ig.partner === 1 ? " is" : "s are"} on a creator's account (partnership ads), so Meta doesn't let the brand read ${s.ig.partner === 1 ? "its" : "their"} comments.`);
-  if (s.ig && s.ig.unreadable) notes.push(`${s.ig.unreadable} Instagram ad post${s.ig.unreadable === 1 ? "" : "s"} couldn't be read. Meta said: ${s.ig.error || "no reason given"}`);
-  if (s.fb && s.fb.notConnected) notes.push(`${s.fb.notConnected} Facebook ad post${s.fb.notConnected === 1 ? " is" : "s are"} on a Page that isn't connected. Reconnect and tick that Page to include ${s.fb.notConnected === 1 ? "it" : "them"}.`);
-  if (!s.ig && s.unreadable) notes.push(`${s.unreadable} ${noun}${s.unreadable === 1 ? "" : "s"} couldn't be read.`);
+  if (s.ig && s.ig.unreadable) notes.push(`${s.ig.unreadable} Instagram ad post${s.ig.unreadable === 1 ? "" : "s"} couldn't be read due to ${s.ig.reason || "an error from Meta"}. Details in the Activity log.`);
+  if (s.fb && s.fb.unreadable) notes.push(`${s.fb.unreadable} Facebook ad post${s.fb.unreadable === 1 ? "" : "s"} couldn't be read due to ${s.fb.reason || "an error from Meta"}. Details in the Activity log.`);
+  if (s.fb && s.fb.notConnected) {
+    const pages = (s.fb.missingPages || []).map((p) => (p.name ? `${p.name} (Page ID ${p.id})` : `Page ID ${p.id}`)).join(", ");
+    notes.push(`${s.fb.notConnected} Facebook ad post${s.fb.notConnected === 1 ? " is" : "s are"} on ${(s.fb.missingPages?.length || 1) === 1 ? "a Page" : "Pages"} this login can't open${pages ? `: ${pages}` : ""}. Get access to ${(s.fb.missingPages?.length || 1) === 1 ? "that Page" : "those Pages"}, then reconnect and tick ${(s.fb.missingPages?.length || 1) === 1 ? "it" : "them"}.`);
+  }
+  const w = sync.withheld;
+  if (w?.facebook) notes.push(`Meta counts comments on ${w.facebook} Facebook ad post${w.facebook === 1 ? "" : "s"} but returned none. This usually means this login's role on the Page doesn't include reading comments. Details in the Activity log.`);
+  if (w?.instagram) notes.push(`Meta counts comments on ${w.instagram} Instagram post${w.instagram === 1 ? "" : "s"} but returned none. Details in the Activity log.`);
+  if (sync.failed) notes.push(`${sync.failed} ${noun}${sync.failed === 1 ? "" : "s"} couldn't be loaded${sync.failReasons?.length ? ` due to ${sync.failReasons.join(", ")}` : ""}. Details in the Activity log.`);
   if (sync.skipped) notes.push(`${sync.skipped} ${noun}${sync.skipped === 1 ? " was" : "s were"} skipped to stay within the time limit. Press refresh to load ${sync.skipped === 1 ? "it" : "them"}.`);
   // A plain statement of what was covered, so "are Instagram ads included?" never needs guessing.
   const coverage = s.ig && s.fb
-    ? `Checked ${s.checked} ads: comments read from ${s.ig.included} Instagram and ${s.fb.included} Facebook ad post${s.fb.included === 1 ? "" : "s"}.`
+    ? `Checked ${s.checked} ads: ${s.ig.included} Instagram and ${s.fb.included} Facebook ad post${s.fb.included === 1 ? "" : "s"} have comments${(w?.instagram || w?.facebook) ? `, of which Meta withheld ${[w?.instagram ? `${w.instagram} Instagram` : "", w?.facebook ? `${w.facebook} Facebook` : ""].filter(Boolean).join(" and ")}` : ""}.`
     : "";
   if (!notes.length && !coverage) return null;
   return (
@@ -908,7 +942,7 @@ function SyncLine({ sync, noun, single }: { sync: Sync; noun: string; single?: b
   else if (sync.phase === "updating") text = `Updating ${sync.loaded || 0} of ${plural(sync.total || 0)} with new comments…`;
   else if (sync.phase === "error") text = `Showing saved comments · couldn't check for new ones`;
   else if (single) text = sync.changed ? `Up to date · fetched ${time}` : `Up to date · saved ${ago(sync.cachedAt || Date.now())}, no new comments`;
-  else text = `${sync.changed ? `Updated ${plural(sync.changed)} with new comments` : "Up to date, nothing new"} · checked ${plural(sync.checked || 0)} at ${time}`
+  else text = `${sync.changed ? `Updated ${plural(Math.max(0, sync.changed))} with new comments` : "Up to date, nothing new"} · checked ${plural(sync.stats?.checked ?? sync.checked ?? 0)} at ${time}`
     + (sync.skipped ? ` · ${sync.skipped} skipped to stay fast` : "") + (sync.failed ? ` · ${sync.failed} couldn't be read` : "");
   const live = sync.phase === "loading" || sync.phase === "checking" || sync.phase === "updating";
   return <span className={`sync${live ? " live" : ""}${sync.phase === "error" ? " err" : ""}`}>{text}</span>;

@@ -65,3 +65,20 @@
 .c-author.anon { color: var(--ink-2); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; cursor: help; }
 .c-author.anon svg { width: 12px; height: 12px; color: var(--faint); }
 .coverage-note { font-size: 12.5px; color: var(--muted); }
+
+/* ---------- Activity log ---------- */
+.log-badge { background: var(--negative-soft); color: var(--negative); border-color: rgba(255, 122, 147, .45); }
+.log-list { display: grid; gap: 8px; max-height: 55vh; overflow-y: auto; }
+.log-row { padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); }
+.log-row.error { border-color: rgba(255, 122, 147, .35); }
+.log-row.warn { border-color: rgba(245, 195, 91, .3); }
+.log-head { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--muted); }
+.log-level { font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.log-row.error .log-level { color: var(--negative); }
+.log-row.warn .log-level { color: var(--warn); }
+.log-area { font-weight: 600; color: var(--ink-2); }
+.log-time { margin-left: auto; }
+.log-msg { font-size: 13px; color: var(--ink); margin-top: 3px; }
+.log-details { margin: 6px 0 0; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
+.log-empty { text-align: center; color: var(--muted); padding: 24px 0; }
+.modal:has(.log-list) { max-width: 720px; }
