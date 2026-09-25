@@ -22,10 +22,12 @@ export async function fetchComments(o: {
     const brand = (o.brandUsername || "").toLowerCase();
     const isBrand = (u?: string) => !!brand && (u || "").toLowerCase() === brand;
     const rows = await graphAll<any>(`${o.objectId}/comments`, o.userToken, {
-      fields: "id,text,timestamp,hidden,username,replies.limit(50){id,text,timestamp,hidden,username}",
+      fields: "id,text,timestamp,hidden,username,from{id,username},replies.limit(50){id,text,timestamp,hidden,username,from{id,username}}",
       limit: 50,
     }, o.maxPages ?? 40);
     for (const r of rows) {
+      r.username ||= r.from?.username || "";
+      for (const rep of r.replies?.data || []) rep.username ||= rep.from?.username || "";
       if (recent(r.timestamp)) {
         out.push({ id: r.id, text: r.text || "", time: r.timestamp, author: r.username || "", hidden: !!r.hidden, canHide: !isBrand(r.username), parentId: null, parentText: null, isBrand: isBrand(r.username) });
       }
@@ -57,7 +59,9 @@ export async function fetchComments(o: {
   for (const r of rows) {
     const isBrand = r.from?.id === pageId;
     out.push({
-      id: r.id, text: r.message || "", time: r.created_time, author: r.from?.name || "Facebook user",
+      // Meta leaves `from` out for Facebook commenters until the app has Advanced Access (App Review);
+      // the UI shows those as "Facebook user" and explains why.
+      id: r.id, text: r.message || "", time: r.created_time, author: r.from?.name || "",
       hidden: !!r.is_hidden, canHide: !!r.can_hide && !isBrand, parentId: r.parent?.id || null,
       parentText: r.parent?.id ? textById.get(r.parent.id) ?? r.parent?.message ?? null : null, isBrand,
     });

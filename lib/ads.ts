@@ -1,14 +1,34 @@
 import { getPages, graph, graphBatch } from "./graph";
 
+const acctIgCache = new Map<string, { at: number; accounts: { id: string; username: string }[] }>();
+
+/** Instagram accounts connected to an ad account (through Business Manager), which may not be linked to any Page. */
+async function adAccountInstagram(userToken: string, adAccountId: string) {
+  const hit = acctIgCache.get(adAccountId);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.accounts;
+  const accounts = await graph<any>(`${adAccountId}/instagram_accounts`, userToken, { fields: "id,username", limit: 50 })
+    .then((r) => (r.data || []).map((a: any) => ({ id: a.id, username: a.username || "" })))
+    .catch(() => []);
+  acctIgCache.set(adAccountId, { at: Date.now(), accounts });
+  return accounts;
+}
+
+/** Why an ad's Instagram post was or wasn't included. */
+export type IgReason = "ok" | "partner" | "unreadable";
+
 /** Lists ads with the post behind each one, and whether that post sits on an account the person manages.
  *  Each ad's post is read in batches of 50 per Meta call (not one call per ad), so large accounts don't hit rate limits. */
 export async function listAds(userToken: string, adAccountId: string, statuses: string[], after?: string, limit = 25, updatedSince?: number) {
   const pages = await getPages(userToken);
   const pageById = new Map(pages.map((p) => [p.id, p]));
-  const igById = new Map(pages.filter((p) => p.instagram_business_account).map((p) => [p.instagram_business_account!.id, p]));
+  // Brand Instagram accounts: those linked to a Page, plus those connected to the ad account.
+  const brandIg = new Map<string, string>();
+  for (const p of pages) if (p.instagram_business_account) brandIg.set(p.instagram_business_account.id, p.instagram_business_account.username || "");
+  for (const a of await adAccountInstagram(userToken, adAccountId)) if (!brandIg.has(a.id)) brandIg.set(a.id, a.username);
+  const brandNames = new Set([...brandIg.values()].filter(Boolean).map((u) => u.toLowerCase()));
 
   const raw: any = await graph(`${adAccountId}/ads`, userToken, {
-    fields: "id,name,effective_status,created_time,updated_time,creative{id,effective_instagram_media_id,effective_object_story_id,thumbnail_url,image_url,title,body}",
+    fields: "id,name,effective_status,created_time,updated_time,creative{id,effective_instagram_media_id,effective_object_story_id,instagram_user_id,thumbnail_url,image_url,title,body}",
     effective_status: JSON.stringify(statuses),
     limit,
     after,
@@ -20,7 +40,7 @@ export async function listAds(userToken: string, adAccountId: string, statuses: 
   const mediaIds = [...new Set(rows.map((a) => a.creative?.effective_instagram_media_id).filter(Boolean))] as string[];
   const media = new Map<string, any>();
   if (mediaIds.length) {
-    const res = await graphBatch(userToken, mediaIds.map((id) => ({ method: "GET", relative_url: `${id}?fields=id,caption,comments_count,permalink,timestamp,media_type,media_url,thumbnail_url,owner{id,username}` })));
+    const res = await graphBatch(userToken, mediaIds.map((id) => ({ method: "GET", relative_url: `${id}?fields=id,caption,comments_count,permalink,timestamp,media_type,media_url,thumbnail_url,username,owner{id,username}` })));
     mediaIds.forEach((id, i) => media.set(id, res[i]));
   }
 
@@ -45,15 +65,21 @@ export async function listAds(userToken: string, adAccountId: string, statuses: 
       const r = media.get(mediaId);
       if (r?.ok) {
         const m = r.body;
-        const ownerPage = m.owner?.id ? igById.get(m.owner.id) : undefined;
+        const ownerId: string = m.owner?.id || "";
+        const ownerUsername: string = m.owner?.username || m.username || "";
+        // It's the brand's post if the owner is a brand account. Ad-only posts (made in Ads Manager, never on the feed)
+        // often come back without an owner: those belong to the ad's own Instagram account, so they count as the brand's.
+        // Only a post whose owner is clearly someone else (a creator, in a partnership ad) is left out.
+        const brandOwned = ownerId ? brandIg.has(ownerId) : ownerUsername ? brandNames.has(ownerUsername.toLowerCase()) : true;
+        const brandUsername = (ownerId && brandIg.get(ownerId)) || (c.instagram_user_id && brandIg.get(c.instagram_user_id)) || ownerUsername || "";
         instagram = {
-          mediaId, owned: !!ownerPage, ownerUsername: m.owner?.username || "",
-          brandUsername: ownerPage?.instagram_business_account?.username || "",
+          mediaId, owned: brandOwned, ownerUsername, brandUsername: brandOwned ? brandUsername : "",
           comments: m.comments_count ?? 0, permalink: m.permalink, caption: m.caption || "",
           image: m.media_type === "VIDEO" ? m.thumbnail_url : m.media_url,
+          reason: (brandOwned ? "ok" : "partner") as IgReason, ownerId,
         };
       } else {
-        instagram = { mediaId, owned: false, ownerUsername: "", brandUsername: "", comments: null, permalink: null, caption: "", unreadable: true, error: r?.error || "Unknown error" };
+        instagram = { mediaId, owned: false, ownerUsername: "", brandUsername: "", comments: null, permalink: null, caption: "", unreadable: true, error: r?.error || "Unknown error", reason: "unreadable" as IgReason };
       }
     }
     let facebook: any = null;
