@@ -1,5 +1,6 @@
 import { graphAll, getPages, pageToken } from "./graph";
 import { listAds } from "./ads";
+import { ACTIVE_STATUSES, PAUSED_STATUSES } from "./adStatus";
 import { fmtShort } from "./format";
 import type { Src } from "./comments";
 
@@ -8,7 +9,11 @@ export type InboxTarget = Src & { count: number };
 const POST_LOOKBACK_DAYS = 60; // new comments usually land on posts from the last two months
 export const MAX_TARGETS = 80;
 
-export type TargetStats = { adsChecked: number; activeChecked: number; pausedChecked: number; unreadable: number; capped: boolean };
+export type TargetStats = {
+  checked: number; activeChecked: number; pausedChecked: number; unreadable: number;
+  /** More posts/ads with comments existed than the inbox reads in one go. */
+  capped: boolean; withComments: number;
+};
 
 /** The posts (or ad posts) that have comments, with their current comment count.
  *  The count is a cheap change signal: if it hasn't moved, the browser's cached comments are still current.
@@ -22,20 +27,19 @@ export async function collectTargets(
 
   if (q.source === "ads") {
     const seen = new Set<string>();
-    const stats: TargetStats = { adsChecked: 0, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: false };
-    // Active ads first, always, so they can never be crowded out by old paused ones.
-    // Then paused ads, but only those changed (e.g. paused) since the window started: an ad paused
-    // long before the window can't have picked up comments in it.
-    const passes: { statuses: string[]; pages: number; updatedSince?: number; kind: "active" | "paused" }[] = [
-      { statuses: ["ACTIVE"], pages: 8, kind: "active" },
+    const stats: TargetStats = { checked: 0, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: false, withComments: 0 };
+    // Active ads first, always, so they can never be crowded out by old paused ones. Then paused ads,
+    // including ads paused at campaign or ad-set level.
+    const passes: { statuses: string[]; pages: number; kind: "active" | "paused" }[] = [
+      { statuses: ACTIVE_STATUSES, pages: 8, kind: "active" },
     ];
-    if (q.status === "all") passes.push({ statuses: ["PAUSED"], pages: 4, updatedSince: Math.floor(sinceMs / 1000), kind: "paused" });
+    if (q.status === "all") passes.push({ statuses: PAUSED_STATUSES, pages: 6, kind: "paused" });
     for (const pass of passes) {
       let after: string | undefined;
       for (let i = 0; i < pass.pages; i++) {
-        const { ads, next } = await listAds(userToken, q.adAccountId || "", pass.statuses, after, 50, pass.updatedSince);
+        const { ads, next } = await listAds(userToken, q.adAccountId || "", pass.statuses, after, 50);
         for (const ad of ads as any[]) {
-          stats.adsChecked++;
+          stats.checked++;
           pass.kind === "active" ? stats.activeChecked++ : stats.pausedChecked++;
           const label = ad.text || ad.name;
           const ig = ad.instagram, fb = ad.facebook;
@@ -54,6 +58,7 @@ export async function collectTargets(
         after = next;
       }
     }
+    stats.withComments = targets.length;
     if (targets.length > MAX_TARGETS) stats.capped = true;
     return { targets: targets.slice(0, MAX_TARGETS), stats };
   }
@@ -79,5 +84,9 @@ export async function collectTargets(
     if (!(n > 0) || Date.parse(p.created_time) < lookbackMs) continue;
     targets.push({ platform: "facebook", objectId: p.id, pageId, brandUsername: "", caption: p.message || "", image: p.full_picture, permalink: p.permalink_url, kind: "post", label: `Post · ${fmtShort(p.created_time)}`, count: n });
   }
-  return { targets: targets.slice(0, MAX_TARGETS) };
+  targets.sort((a, b) => b.count - a.count);
+  return {
+    targets: targets.slice(0, MAX_TARGETS),
+    stats: { checked: media.length + fbPosts.length, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: targets.length > MAX_TARGETS, withComments: targets.length },
+  };
 }
