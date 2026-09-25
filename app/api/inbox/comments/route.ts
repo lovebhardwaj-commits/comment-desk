@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       await mapLimit(targets, 6, async (t) => {
         if (Date.now() - started > TIME_BUDGET_MS) return send({ type: "skipped", objectId: t.objectId });
         try {
-          const comments = await fetchComments({ platform: t.platform, objectId: t.objectId, userToken: token, pageId: t.pageId, brandUsername: t.brandUsername, sinceMs, maxPages: 4 });
+          const comments = await fetchComments({ platform: t.platform, objectId: t.objectId, userToken: token, pageId: t.pageId, brandUsername: t.brandUsername, brandId: t.brandId, sinceMs, maxPages: t.platform === "instagram" ? 20 : 10 });
           send({ type: "comments", objectId: t.objectId, comments: comments.filter((c) => Date.parse(c.time) <= untilMs) });
         } catch (e: any) {
           send({ type: "failed", objectId: t.objectId, error: e?.message || "error" });

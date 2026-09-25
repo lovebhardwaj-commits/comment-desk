@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     const platform = q.get("platform") === "instagram" ? "instagram" : "facebook";
     const comments = await fetchComments({
       platform, objectId: q.get("objectId") || "", userToken: await requireToken(),
-      pageId: q.get("pageId") || undefined, brandUsername: q.get("brandUsername") || "",
+      pageId: q.get("pageId") || undefined, brandUsername: q.get("brandUsername") || "", brandId: q.get("brandId") || undefined,
     });
     return { comments };
   });

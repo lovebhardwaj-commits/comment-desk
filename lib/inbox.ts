@@ -13,6 +13,9 @@ export type TargetStats = {
   checked: number; activeChecked: number; pausedChecked: number; unreadable: number;
   /** More posts/ads with comments existed than the inbox reads in one go. */
   capped: boolean; withComments: number;
+  /** Instagram ad posts: how many were included, on creator accounts (partnership ads), or unreadable (with Meta's reason). */
+  ig?: { included: number; partner: number; unreadable: number; error?: string; noComments: number };
+  fb?: { included: number; notConnected: number; unreadable: number; noComments: number };
 };
 
 /** The posts (or ad posts) that have comments, with their current comment count.
@@ -27,7 +30,10 @@ export async function collectTargets(
 
   if (q.source === "ads") {
     const seen = new Set<string>();
-    const stats: TargetStats = { checked: 0, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: false, withComments: 0 };
+    const stats: TargetStats = {
+      checked: 0, activeChecked: 0, pausedChecked: 0, unreadable: 0, capped: false, withComments: 0,
+      ig: { included: 0, partner: 0, unreadable: 0, noComments: 0 }, fb: { included: 0, notConnected: 0, unreadable: 0, noComments: 0 },
+    };
     // Active ads first, always, so they can never be crowded out by old paused ones. Then paused ads,
     // including ads paused at campaign or ad-set level.
     const passes: { statuses: string[]; pages: number; kind: "active" | "paused" }[] = [
@@ -44,11 +50,23 @@ export async function collectTargets(
           const label = ad.text || ad.name;
           const ig = ad.instagram, fb = ad.facebook;
           if (ig?.unreadable || fb?.unreadable) stats.unreadable++;
+          if (ig) {
+            if (ig.unreadable) { stats.ig!.unreadable++; stats.ig!.error ||= ig.error; }
+            else if (!ig.owned) stats.ig!.partner++;
+            else if (!(ig.comments > 0)) stats.ig!.noComments++;
+          }
+          if (fb) {
+            if (!fb.owned) stats.fb!.notConnected++;
+            else if (fb.unreadable) stats.fb!.unreadable++;
+            else if (!(fb.comments > 0)) stats.fb!.noComments++;
+          }
           if (ig?.owned && !ig.unreadable && ig.comments > 0 && !seen.has(ig.mediaId)) {
+            stats.ig!.included++;
             seen.add(ig.mediaId);
-            targets.push({ platform: "instagram", objectId: ig.mediaId, pageId: "", brandUsername: ig.brandUsername, caption: ig.caption || label, image: ad.image, permalink: ig.permalink, kind: "ad", label: ad.name, adId: ad.id, count: ig.comments });
+            targets.push({ platform: "instagram", objectId: ig.mediaId, pageId: "", brandUsername: ig.brandUsername, brandId: ig.ownerId || undefined, caption: ig.caption || label, image: ad.image, permalink: ig.permalink, kind: "ad", label: ad.name, adId: ad.id, count: ig.comments });
           }
           if (fb?.owned && !fb.unreadable && fb.comments > 0 && !seen.has(fb.postId)) {
+            stats.fb!.included++;
             seen.add(fb.postId);
             targets.push({ platform: "facebook", objectId: fb.postId, pageId: fb.pageId, brandUsername: "", caption: fb.caption || label, image: ad.image, permalink: fb.permalink, kind: "ad", label: ad.name, adId: ad.id, count: fb.comments });
           }
@@ -77,7 +95,7 @@ export async function collectTargets(
   for (const m of media) {
     if (!(m.comments_count > 0) || Date.parse(m.timestamp) < lookbackMs) continue;
     const type = m.media_product_type === "REELS" ? "Reel" : m.media_type === "CAROUSEL_ALBUM" ? "Carousel" : m.media_type === "VIDEO" ? "Video" : "Post";
-    targets.push({ platform: "instagram", objectId: m.id, pageId, brandUsername: ig?.username || "", caption: m.caption || "", image: m.media_type === "VIDEO" ? m.thumbnail_url : m.media_url, permalink: m.permalink, kind: "post", label: `${type} · ${fmtShort(m.timestamp)}`, count: m.comments_count });
+    targets.push({ platform: "instagram", objectId: m.id, pageId, brandUsername: ig?.username || "", brandId: ig?.id, caption: m.caption || "", image: m.media_type === "VIDEO" ? m.thumbnail_url : m.media_url, permalink: m.permalink, kind: "post", label: `${type} · ${fmtShort(m.timestamp)}`, count: m.comments_count });
   }
   for (const p of fbPosts) {
     const n = p.comments?.summary?.total_count || 0;
