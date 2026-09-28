@@ -31,7 +31,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Names:** Instagram usernames always show. Facebook names only show when Meta provides them (see *Known limits*); otherwise the comment says "Facebook user".
 
 ### What the numbers mean
-- **Open** = customer comments that are still visible. Hidden comments and the brand's own replies are not counted as open.
+- **Open** = customer comments that are still visible. Hidden comments and the brand's own replies are not counted as open. The line under it only appears when it adds something: *"of 1,040 on Instagram"* for a single post, or *"12 hidden not counted"*.
 - Under a post's header, a line adds everything up to Meta's own count, for example:
   *1,040 on Instagram = 557 open + 3 hidden + 478 brand replies + 2 not returned by Meta.*
   "Not returned by Meta" are comments Meta counts but doesn't give to apps (usually deleted, or from restricted or private accounts). It turns amber if it's large.
@@ -49,10 +49,11 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Correct a category**: change it from the dropdown on the comment. The comment moves to its new category, and the built-in model learns from the correction.
 
 ### Staying informed
-- **Status line** on every view: *Up to date*, *checking for new ones…*, or how many posts were updated.
+- **Status line** on every view: how fresh the data is, e.g. *Saved at 12:23 pm · press Refresh to check for new comments*, or how many posts were just updated.
+- **Refresh button** (labelled) next to the date controls: the one-click way to get the latest comments.
 - **Fetching overlay**: whenever the app is talking to Meta, the comments are dimmed and a card in the middle shows progress, so nobody acts on data that's about to change.
-- **Coverage and warnings** (All comments, ads): how many ads were checked and how many had comments on each platform, plus plain-English notes for anything missed, e.g. partnership ads, Pages this login can't open (named, with Page ID), posts Meta refused (*due to missing permissions*), or comments Meta counts but withholds.
-- **Activity log** (sidebar): every failure, gap or refused request, with the post ID, Page ID and Meta's exact response. *Copy all* puts it on the clipboard to send for a fix. Kept for 24 hours in this browser.
+- **Coverage and notes** (All comments, ads): one line saying how many ads were checked and how many had comments on each platform. Anything missed sits behind one button, *"Some comments couldn't be loaded · N things to check"*; each note says what to do (e.g. which Page ID needs access or a role check).
+- **Activity log** (sidebar): every failure, gap or refused request, with the post ID, Page ID and Meta's exact response. Each entry also has **Graph API checks** you can run yourself: an *Open in Graph API Explorer* link (pick the Page, press Submit) and a *Copy curl* command. Access tokens are never put in the log; the curl uses a placeholder. *Copy all* puts everything on the clipboard to send for a fix. Kept for 24 hours in this browser.
 - **Diagnostic page** for one post: `/api/diagnose/comments?platform=facebook|instagram&objectId=…` shows exactly what Meta returns (counts, first page, whether names are included). Linked from gap warnings.
 
 ---
@@ -61,10 +62,11 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 1. **Login**: people log in with Facebook. The app only sees the Pages, Instagram accounts and ad accounts that person manages and ticked during login.
 2. **Finding comments (All comments)**: the app first asks Meta which posts or ads have comments and how many (a quick check). It then downloads comments only for posts whose count changed since last time, and streams them in post by post.
-3. **Saving in the browser**: fetched comments, categories and post lists are saved in the browser (IndexedDB) for 24 hours and cleared on logout. Opening a view shows the saved copy immediately, then checks Meta. A view checked in the last 2 minutes isn't re-checked when you switch back to it; the refresh button always re-checks.
-4. **Checks against Meta's count**: if Meta says a post has comments but far fewer come back, the app doesn't trust the saved copy, fetches again, and warns if it's still short.
-5. **Categorising**: a built-in model (free, runs on the server) sorts each comment. It understands English, Hindi and Hinglish. Corrections from the team are fed back in. It can be switched to Claude (paid) with a setting.
-6. **Ads**: active ads are always read first, then paused ones. Each ad's post is read in batches of 50 per Meta call.
+3. **Saving in the browser**: fetched comments, categories, post lists and ad lists are saved in the browser (IndexedDB) for 24 hours and cleared on logout.
+4. **When the app asks Meta** (and only then): when you pick a time window or dates, when you press **Refresh**, or when nothing is saved yet for that account. Switching pages, views or browser tabs, or reloading the page, shows the saved copy and says when it was saved.
+5. **Checks against Meta's count**: if Meta says a post has comments but far fewer come back, the app doesn't trust the saved copy, fetches again, and warns if it's still short.
+6. **Categorising**: a built-in model (free, runs on the server) sorts each comment. It understands English, Hindi and Hinglish. Corrections from the team are fed back in. It can be switched to Claude (paid) with a setting.
+7. **Ads**: active ads are always read first, then paused ones. Each ad's post is read in batches of 50 per Meta call.
 
 ---
 
@@ -77,7 +79,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 | Partnership (creator) ads' comments can't be read | The post belongs to the creator's account | Nothing on our side; creator must share access |
 | Comments on posts older than ~60 days before the window aren't in *All comments* | Keeps the check fast | Visible in *By post* |
 | Up to 80 posts/ads per check; ~1,000 Instagram comments per post in *All comments* | Vercel's 60-second limit | A note appears when the limit is hit |
-| Edits/deletes by others aren't noticed until refresh or 24 h | The quick check only compares comment counts | Refresh button |
+| New comments only appear after Refresh (or picking a time window) | By design: the app doesn't re-fetch on its own when you switch pages or tabs | Refresh button; the status line shows when data was saved |
+| Edits/deletes by others aren't noticed until a full Refresh or 24 h | The quick check only compares comment counts | Refresh button |
 | Category corrections are lost when the server restarts | Needs Upstash Redis | Add Upstash Redis in Vercel |
 | Only people with a role on the Meta app can log in; no webhooks | Meta app is in Development mode | Business Verification + App Review |
 | Everything runs on each person's own Facebook login | No System User yet | System User token (planned) |
@@ -110,6 +113,13 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ---
 
 ## 7. Change history
+
+### 28 Sept 2026 (later)
+- **No more automatic re-fetching:** the app asks Meta only when you pick a time window or dates, press Refresh, or nothing is saved yet. Switching pages, views or tabs (and reloading) shows the saved copy, with when it was saved. Post and ad lists follow the same rule.
+- **Refresh is now a labelled button.**
+- **Open card:** no more "852 total" next to 852 open; the line under it only shows when it adds information.
+- **Notes grouped:** one line, *"Some comments couldn't be loaded · N things to check"*, expands into short notes that each say what to do. Withheld Facebook comments now name the Page ID to check; the "switch to Active" tip only shows when you're on + Paused; long Page lists are shortened.
+- **Activity log: Graph API checks** on every problem, as an *Open in Graph API Explorer* link and a *Copy curl* command (no tokens).
 
 ### 28 Sept 2026
 - **New: Reply** to comments publicly as the brand (Instagram and Facebook), with saved replies, *Reply & hide* for negatives, and the reply shown instantly under the comment.

@@ -108,3 +108,13 @@
 .reply-count.over { color: var(--negative); }
 .sent-reply { margin-top: 8px; padding: 6px 10px; border-left: 2px solid var(--violet); font-size: 13px; color: var(--ink-2); background: var(--violet-soft); border-radius: 0 8px 8px 0; }
 .sent-reply b { color: var(--violet); font-weight: 700; margin-right: 6px; }
+.log-check { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); }
+.log-check-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
+.log-check-head span { flex: 1; min-width: 200px; }
+.log-check-head em { color: var(--faint); font-style: normal; }
+.log-curl { margin: 6px 0 0; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
+.notes-toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 4px 10px 4px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 600; width: fit-content; }
+.notes-toggle.warn { color: var(--warn); border-color: rgba(245, 195, 91, .35); }
+.notes-toggle svg { width: 14px; height: 14px; }
+.limit-note.calm { color: var(--muted); }
+.sync.cached::before { background: var(--faint); }

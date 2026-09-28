@@ -72,6 +72,9 @@ function App({ userName }: { userName: string }) {
   const [rangeFrom, setRangeFrom] = useState(iso(new Date(Date.now() - 7 * 864e5)));
   const [rangeTo, setRangeTo] = useState(iso(new Date()));
   const [inboxNonce, setInboxNonce] = useState(0);
+  // Goes up when the person picks a time window or dates: the moment the app should check Meta again.
+  const [checkReq, setCheckReq] = useState(0);
+  const postsForce = useRef(false);
   const [panelNonce, setPanelNonce] = useState(0);
   const pendingTarget = useRef<Target | null>(null);
 
@@ -103,16 +106,6 @@ function App({ userName }: { userName: string }) {
 
   const page = useMemo(() => pages?.find((p) => p.id === pageId), [pages, pageId]);
 
-  // "Last 24 hours" etc. are measured from when they were picked. When the tab comes back into view
-  // after more than 5 minutes, move the window up to now, so the label stays true.
-  useEffect(() => {
-    const onShow = () => {
-      if (document.visibilityState === "visible" && preset !== "custom" && Date.now() - stamp > 5 * 60 * 1000) setStamp(Date.now());
-    };
-    document.addEventListener("visibilitychange", onShow);
-    return () => document.removeEventListener("visibilitychange", onShow);
-  }, [preset, stamp]);
-
   const win = useMemo(() => {
     if (preset !== "custom") {
       const label = preset === 1 ? "last 24 hours" : `last ${preset} days`;
@@ -125,7 +118,7 @@ function App({ userName }: { userName: string }) {
   }, [preset, stamp, rangeFrom, rangeTo]);
 
   /** Loads posts. Shows the cached list straight away (if any), then replaces it with Meta's current list. */
-  const loadPosts = useCallback(async (after?: string) => {
+  const loadPosts = useCallback(async (after?: string, force = false) => {
     if (!page) return;
     const accountId = platform === "instagram" ? page.instagram?.id : page.id;
     if (!accountId) return;
@@ -153,8 +146,11 @@ function App({ userName }: { userName: string }) {
     };
     if (!after) {
       const c = await cacheGet<{ posts: Post[]; next: string | null }>(key);
-      if (c) { setPosts(c.value.posts); setPostsNext(c.value.next); pickTarget(c.value.posts); shown = true; }
-      else setPosts(null);
+      if (c) {
+        setPosts(c.value.posts); setPostsNext(c.value.next); pickTarget(c.value.posts); shown = true;
+        // Saved list is used as is. Meta is only asked on Refresh or when new dates are picked.
+        if (!force) { setPostsBusy(false); return; }
+      } else setPosts(null);
     }
     try {
       const qs = new URLSearchParams({ platform, accountId, since, until, ...(after ? { after } : {}) });
@@ -171,12 +167,14 @@ function App({ userName }: { userName: string }) {
   // Load posts automatically when the Page, platform or dates change.
   useEffect(() => {
     if (view !== "posts" || !page || postsMode !== "list") return;
-    const t = setTimeout(() => loadPosts(), 250);
+    const force = postsForce.current;
+    postsForce.current = false;
+    const t = setTimeout(() => loadPosts(undefined, force), 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, platform, since, until, view, pages, postsMode]);
 
-  /** Loads ads. The ad list is slow to build, so a cached copy under 5 minutes old is used as is. */
+  /** Loads ads. A saved list is used as is; Meta is asked when nothing is saved, or on Refresh. */
   const loadAds = useCallback(async (after?: string, force = false) => {
     if (!adAccountId) return;
     setAdsBusy(true); setAdsError("");
@@ -185,8 +183,9 @@ function App({ userName }: { userName: string }) {
     if (!after) {
       const c = await cacheGet<{ ads: Ad[]; next: string | null }>(key);
       if (c && !force) {
+        // Saved list is used as is. Meta is only asked on Refresh.
         setAds(c.value.ads); setAdsNext(c.value.next); shown = true;
-        if (Date.now() - c.at < 5 * 60 * 1000) { setAdsFetchedAt(new Date(c.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase()); setAdsBusy(false); return; }
+        setAdsFetchedAt(new Date(c.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase()); setAdsBusy(false); return;
       } else if (!c) { setAds(null); setAdId(""); setTarget(null); }
     }
     try {
@@ -256,7 +255,7 @@ function App({ userName }: { userName: string }) {
 
   /** Inbox specs: every comment in the chosen window, for the brand's posts or the ad account's ads. */
   const postsInbox = page ? {
-    key: `inbox:posts:${page.id}:${win.id}`, cacheKey: `inbox:posts:${page.id}`, refresh: inboxNonce,
+    key: `inbox:posts:${page.id}:${win.id}`, cacheKey: `inbox:posts:${page.id}`, refresh: inboxNonce, checkReq,
     sinceMs: win.sinceMs, untilMs: win.untilMs, label: win.label, phrase: win.phrase,
     scope: `${page.name} · ${page.instagram ? "Instagram and Facebook" : "Facebook"} posts`,
     targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "posts", pageId: page.id, since: String(win.sinceMs) })}`,
@@ -271,7 +270,7 @@ function App({ userName }: { userName: string }) {
   } : undefined;
   const adAccountName = adAccounts?.find((a) => a.id === adAccountId)?.name || "";
   const adsInbox = adAccountId ? {
-    key: `inbox:ads:${adAccountId}:${adStatus}:${win.id}`, cacheKey: `inbox:ads:${adAccountId}:${adStatus}`, noun: "ad" as const, refresh: inboxNonce,
+    key: `inbox:ads:${adAccountId}:${adStatus}:${win.id}`, cacheKey: `inbox:ads:${adAccountId}:${adStatus}`, noun: "ad" as const, refresh: inboxNonce, checkReq, status: adStatus,
     sinceMs: win.sinceMs, untilMs: win.untilMs, label: win.label, phrase: win.phrase,
     scope: `${adAccountName} · ${adStatus === "active" ? "active" : "active and paused"} ads on Instagram and Facebook`,
     targetsUrl: `/api/inbox/targets?${new URLSearchParams({ source: "ads", adAccountId, status: adStatus, since: String(win.sinceMs) })}`,
@@ -297,17 +296,17 @@ function App({ userName }: { userName: string }) {
   const daysSeg = (
     <div className="seg" role="group" aria-label="Time window">
       {([1, 7, 14] as const).map((d) => (
-        <button key={d} aria-pressed={preset === d} onClick={() => { setPreset(d); setStamp(Date.now()); }}>{d === 1 ? "24 hours" : `${d} days`}</button>
+        <button key={d} aria-pressed={preset === d} onClick={() => { setPreset(d); setStamp(Date.now()); setCheckReq((n) => n + 1); }}>{d === 1 ? "24 hours" : `${d} days`}</button>
       ))}
     </div>
   );
   const customRange = (
     <DateRange from={rangeFrom} to={rangeTo} active={preset === "custom"}
-      onApply={(f, t) => { setRangeFrom(f); setRangeTo(t); setPreset("custom"); }} />
+      onApply={(f, t) => { setRangeFrom(f); setRangeTo(t); setPreset("custom"); setCheckReq((n) => n + 1); }} />
   );
   const refreshBtn = (busy: boolean, onClick: () => void) => (
-    <button className="btn btn-icon" onClick={onClick} disabled={busy} aria-label="Refresh" title="Refresh from Meta">
-      <RefreshCw className={busy ? "spin" : undefined} />
+    <button className="btn" onClick={onClick} disabled={busy} title="Check Meta for new comments">
+      <RefreshCw className={busy ? "spin" : undefined} />Refresh
     </button>
   );
 
@@ -341,9 +340,9 @@ function App({ userName }: { userName: string }) {
             <span className="spacer" />
             {postsMode === "inbox" ? (<>{daysSeg}{customRange}</>) : (
               <DateRange from={since} to={until} active label="Dates" maxDaysBack={365}
-                onApply={(f, t) => { setSince(f); setUntil(t); }} />
+                onApply={(f, t) => { postsForce.current = true; setSince(f); setUntil(t); if (f === since && t === until) loadPosts(undefined, true); }} />
             )}
-            {refreshBtn(postsBusy || !page, () => { if (postsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadPosts(); setPanelNonce((n) => n + 1); } })}
+            {refreshBtn(postsBusy || !page, () => { if (postsMode === "inbox") { setStamp(Date.now()); setInboxNonce((n) => n + 1); } else { loadPosts(undefined, true); setPanelNonce((n) => n + 1); } })}
           </div>
 
           <AccessCallout pages={pages} page={page} missingPermissions={missingPermissions} />
