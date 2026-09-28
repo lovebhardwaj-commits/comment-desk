@@ -33,6 +33,13 @@ export function pageCheck(pageId: string): GraphCheck[] {
   ];
 }
 
+/** Check whether Meta has a comment as hidden. */
+export function hiddenCheck(platform: "instagram" | "facebook", commentId: string): GraphCheck {
+  return platform === "instagram"
+    ? check("Is this comment hidden? (\"hidden\": true means yes)", commentId, { fields: "id,text,hidden" }, "user")
+    : check("Is this comment hidden? (\"is_hidden\": true means yes)", commentId, { fields: "id,message,is_hidden" }, "page");
+}
+
 /** Check a post Meta refused to open. */
 export function postCheck(platform: "instagram" | "facebook", objectId: string): GraphCheck {
   return platform === "instagram"

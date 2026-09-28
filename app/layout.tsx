@@ -16,6 +16,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+        {/* Facebook adds "#_=_" to the address after login. Remove it so the URL stays clean. */}
+        <script dangerouslySetInnerHTML={{ __html: `if(location.hash==="#_=_"||location.hash==="#"){history.replaceState(null,"",location.pathname+location.search)}` }} />
       </head>
       <body>{children}</body>
     </html>
