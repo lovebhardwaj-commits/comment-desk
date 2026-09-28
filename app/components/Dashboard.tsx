@@ -248,6 +248,10 @@ function App({ userName }: { userName: string }) {
       pendingTarget.current = null;
       const ad = ads.find((a) => a.id === (t as any).adId);
       if (ad) { openAd(ad, t.platform); return; }
+      // Not in the ads loaded so far: open the post the comment came from directly, on the same platform.
+      setAdId("");
+      setTarget(t);
+      return;
     }
     if (view === "ads" && adsMode === "list" && ads && !adId && readableAds[0]) openAdCard(readableAds[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,7 +281,7 @@ function App({ userName }: { userName: string }) {
     onFetched: () => setAdsFetchedAt(timeNow()),
     onOpen: (src: Src) => {
       pendingTarget.current = { key: `${src.platform}:${src.objectId}`, platform: src.platform, objectId: src.objectId, pageId: src.pageId,
-        brandUsername: src.brandUsername, title: src.label, caption: src.caption, permalink: src.permalink || "", image: src.image || undefined, kind: "ad", ...( { adId: src.adId } as any) };
+        brandUsername: src.brandUsername, title: `Ad · ${src.label}`, caption: src.caption, permalink: src.permalink || "", image: src.image || undefined, kind: "ad", ...( { adId: src.adId } as any) };
       setAdId("");
       setAdsMode("list");
     },
@@ -499,7 +503,9 @@ function App({ userName }: { userName: string }) {
                 </div>
               </section>
               <section className="detail" aria-label="Comments">
-                {target && currentAd ? (
+                {target && !currentAd ? (
+                  <CommentsPanel key={target.key} target={target} refresh={panelNonce} />
+                ) : target && currentAd ? (
                   <CommentsPanel key={target.key} target={target} refresh={panelNonce} headerExtra={adPlacements(currentAd).length > 1 ? (
                     <div className="seg sm" role="group" aria-label="Placement">
                       {adPlacements(currentAd).map((p) => (
