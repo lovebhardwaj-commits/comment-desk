@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 import { logEvent } from "./log";
+import ReplyBox from "./ReplyBox";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -125,6 +126,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [verified, setVerified] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState<Record<string, string>>({});
   const movingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Replying: which comment has the reply box open, which reply is being sent, and replies sent from here.
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<Record<string, string>>({});
   // Hide-all dialog
   const [hideAllOpen, setHideAllOpen] = useState(false);
   const [skipComplaints, setSkipComplaints] = useState(false);
@@ -441,6 +446,46 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     setHideAllResult(null);
   }
 
+  /** The name the brand replies under, for the reply box. */
+  const brandName = (c: Comment) => {
+    const u = c.src?.brandUsername || target?.brandUsername;
+    return u ? `@${u}` : platOf(c) === "facebook" ? "your Page" : "the brand";
+  };
+
+  /** Posts a public reply as the brand, shows it under the comment straight away, and optionally hides the comment. */
+  async function sendReply(c: Comment, text: string, alsoHide: boolean) {
+    if (sending) return;
+    const w = whereIs(c);
+    // Instagram only takes replies on top-level comments, so a reply to a reply goes into the same thread with an @mention.
+    const top = c.parentId || c.id;
+    const message = c.parentId && w.platform === "instagram" && c.author && !text.startsWith("@") ? `@${c.author} ${text}` : text;
+    setSending(true);
+    try {
+      const d = await api<{ id: string; time: string }>("/api/reply", {
+        method: "POST",
+        body: JSON.stringify({ platform: w.platform, pageId: w.pageId, commentId: top, message }),
+      });
+      const parent = (comments || []).find((x) => x.id === top);
+      const reply: Comment = {
+        id: d.id || `local-${Date.now()}`, text: message, time: d.time || new Date().toISOString(),
+        author: (c.src?.brandUsername || target?.brandUsername || "").trim(), hidden: false, canHide: false,
+        parentId: top, parentText: parent?.text ?? c.text, isBrand: true, src: c.src,
+      };
+      if (c.src) (byObj.current[c.src.objectId] ||= []).push(reply);
+      setComments((list) => [...(list || []), reply]);
+      setSent((m) => ({ ...m, [c.id]: message }));
+      setReplyingTo(null);
+      persistSoon();
+      toast({ kind: "ok", msg: `Reply posted on ${w.platform === "instagram" ? "Instagram" : "Facebook"}.` });
+      if (alsoHide && c.canHide && !c.hidden) await hideWithUndo([c.id]);
+    } catch (e: any) {
+      toast({ kind: "err", msg: e.message });
+      logEvent({ level: "error", area: "reply", message: `Couldn't post a reply on ${w.platform}`, details: { commentId: top, error: e.message } });
+    } finally {
+      setSending(false);
+    }
+  }
+
   const resultFor = (label: string): Result => ({
     category: label === "Enquiry" || label === "Positive" ? (label as Category) : "Negative",
     negative_type: label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null,
@@ -545,8 +590,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const replied = useMemo(() => {
     const s = new Set<string>();
     for (const c of comments || []) if (c.isBrand && c.parentId) s.add(c.parentId);
+    for (const id of Object.keys(sent)) s.add(id);
     return s;
-  }, [comments]);
+  }, [comments, sent]);
 
   const insight = useMemo(() => {
     if (progress || !customer.length) return null;
@@ -903,6 +949,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                     {r?.needs_review && <span className="tag tag-review">Needs review</span>}
                     <span className="c-reason">{r?.reason}</span>
                     <span className="c-actions">
+                      <button className="btn btn-sm btn-ghost" onClick={() => setReplyingTo(replyingTo === c.id ? null : c.id)} aria-expanded={replyingTo === c.id}><Reply />Reply</button>
                       {c.canHide ? (
                         c.hidden ? (
                           <button className="btn btn-sm" disabled={!!busy[c.id]} onClick={() => unhide(c)}><Eye />{busy[c.id] ? "…" : "Unhide"}</button>
@@ -914,6 +961,13 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                       )}
                     </span>
                   </div>
+                )}
+                {sent[c.id] && <div className="sent-reply"><b>You replied</b>{sent[c.id]}</div>}
+                {replyingTo === c.id && !c.isBrand && (
+                  <ReplyBox to={c.author ? (platOf(c) === "instagram" ? `@${c.author}` : c.author) : platOf(c) === "facebook" ? "this Facebook user" : "this comment"}
+                    platform={platOf(c)} asName={brandName(c)} max={platOf(c) === "instagram" ? 2200 : 8000}
+                    negative={r?.category === "Negative" && c.canHide && !c.hidden} busy={sending}
+                    onSend={(t, hide) => sendReply(c, t, hide)} onCancel={() => setReplyingTo(null)} />
                 )}
               </div>
             </article>
