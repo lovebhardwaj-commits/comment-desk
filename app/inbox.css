@@ -86,3 +86,25 @@
 .breakdown-line b { color: var(--ink); font-weight: 700; }
 .breakdown-line .warn { color: var(--warn); font-weight: 600; }
 .breakdown-line .faint { color: var(--faint); }
+
+/* ---------- Reply ---------- */
+.reply-box { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--violet-line); background: var(--bg-2); display: grid; gap: 8px; }
+.reply-to { font-size: 12px; color: var(--muted); }
+.reply-to b { color: var(--ink-2); font-weight: 600; }
+.reply-box textarea { width: 100%; resize: vertical; min-height: 44px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; }
+.reply-box textarea:focus { outline: none; border-color: var(--violet-line); }
+.saved-replies { display: flex; flex-wrap: wrap; gap: 6px; }
+.saved-chip { display: inline-flex; align-items: center; max-width: 100%; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface); }
+.saved-chip button { background: none; border: 0; color: var(--ink-2); font-size: 12px; padding: 4px 4px 4px 10px; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-chip button:hover { color: var(--ink); }
+.saved-chip .x { padding: 4px 8px 4px 2px; color: var(--faint); display: grid; place-items: center; }
+.saved-chip .x svg { width: 12px; height: 12px; }
+.reply-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reply-foot .spacer { flex: 1; }
+.reply-foot .linkish { display: inline-flex; align-items: center; gap: 4px; }
+.reply-foot .linkish svg { width: 13px; height: 13px; }
+.reply-foot .linkish:disabled { opacity: .4; cursor: default; }
+.reply-count { font-size: 11.5px; color: var(--faint); }
+.reply-count.over { color: var(--negative); }
+.sent-reply { margin-top: 8px; padding: 6px 10px; border-left: 2px solid var(--violet); font-size: 13px; color: var(--ink-2); background: var(--violet-soft); border-radius: 0 8px 8px 0; }
+.sent-reply b { color: var(--violet); font-weight: 700; margin-right: 6px; }
