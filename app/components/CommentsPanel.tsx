@@ -6,7 +6,7 @@ import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 import { logEvent } from "./log";
 import ReplyBox from "./ReplyBox";
-import { commentChecks, pageCheck, postCheck } from "./graphDebug";
+import { commentChecks, pageCheck, postCheck, hiddenCheck } from "./graphDebug";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -390,6 +390,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         });
         all.push(...d.results);
         const byId = new Map(d.results.map((r) => [r.id, r]));
+        const okIds = d.results.filter((r) => r.ok).map((r) => r.id);
+        if (okIds.length) logEvent({
+          level: "info", area: hide ? "hide" : "unhide",
+          message: `${okIds.length} ${ch.platform === "instagram" ? "Instagram" : "Facebook"} comment${okIds.length === 1 ? "" : "s"} ${hide ? "hidden" : "unhidden"}${d.results.every((r) => !r.ok || r.verified) ? ", confirmed by Meta" : ""}`,
+          details: { commentIds: okIds.slice(0, 20), note: hide ? "Hidden comments stay visible to the person who wrote them, their friends, and the Page's admins (shown greyed out). To check, view the post logged out or from an unrelated account." : undefined, checks: [hiddenCheck(ch.platform as "instagram" | "facebook", okIds[0])] },
+        });
         setComments((list) => list?.map((x) => (byId.has(x.id) ? { ...x, hidden: byId.get(x.id)!.hidden } : x)) || null);
         persistSoon();
         setVerified((v) => {
@@ -932,7 +938,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                   <span>{fmtDateTime(c.time)}</span>
                   {c.isBrand && <span className="tag tag-brand">Brand</span>}
                   {c.hidden && (verified.has(c.id)
-                    ? <span className="tag tag-verified" title="Meta confirmed this comment is hidden"><ShieldCheck />Hidden · confirmed</span>
+                    ? <span className="tag tag-verified" title="Meta confirmed this comment is hidden from the public. The person who wrote it and their friends can still see it, and the Page's admins see it greyed out."><ShieldCheck />Hidden · confirmed</span>
                     : <span className="tag tag-hidden"><EyeOff />Hidden</span>)}
                   {moving[c.id] && <span className="moved-note"><ArrowRight />Moved to {moving[c.id]}</span>}
                   {!c.isBrand && replied.has(c.id) && <span className="tag tag-fixed"><CornerDownRight />Brand replied</span>}
