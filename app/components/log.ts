@@ -54,6 +54,9 @@ export function useLog() {
 export function logText(list: LogEntry[]) {
   return list.map((e) => {
     const t = new Date(e.at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    return `${t} ${e.level.toUpperCase()} [${e.area}] ${e.message}${e.repeats ? ` (x${e.repeats})` : ""}${e.details ? `\n    ${JSON.stringify(e.details)}` : ""}`;
+    const { checks, ...rest } = (e.details || {}) as { checks?: { label: string; curl: string }[] } & Record<string, unknown>;
+    const extra = Object.keys(rest).length ? `\n    ${JSON.stringify(rest)}` : "";
+    const cmds = (checks || []).map((c) => `\n    # ${c.label}\n    ${c.curl}`).join("");
+    return `${t} ${e.level.toUpperCase()} [${e.area}] ${e.message}${e.repeats ? ` (x${e.repeats})` : ""}${extra}${cmds}`;
   }).join("\n");
 }
