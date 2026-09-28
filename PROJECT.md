@@ -27,7 +27,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Time window** (All comments): 24 hours, 7 days, 14 days, or a custom date range (up to 90 days back).
 - **Ads filter:** *Active* (delivering, in review or with issues) or *+ Paused* (also ads paused directly or through their campaign or ad set).
 - **Filters:** by category (the cards at the top), by platform (Instagram / Facebook), by search text, newest or oldest first, show or hide already-hidden comments, show or hide the brand's own replies.
-- **Each comment shows** who wrote it, when, which post or ad it's on (click to open that post), its category, and tags like *Hidden*, *Brand replied*.
+- **Each comment shows** who wrote it, when, which post or ad it's on, its category, and tags like *Hidden*, *Brand replied*. Clicking the post opens exactly that post on the same platform in *By post / By ad*.
 - **Names:** Instagram usernames always show. Facebook names only show when Meta provides them (see *Known limits*); otherwise the comment says "Facebook user".
 
 ### What the numbers mean
@@ -38,7 +38,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Enquiry / Positive / Negative / To review** cards show counts of open comments and their share.
 
 ### Acting on comments
-- **Hide / Unhide** a single comment. Meta is asked to confirm each hide; confirmed ones show *Hidden · confirmed*.
+- **Hide / Unhide** a single comment. Meta is asked to confirm each hide; confirmed ones show *Hidden · confirmed*. Hidden means hidden from the public: **the person who wrote the comment, their friends, and the Page's admins still see it** (admins see it greyed out). To check a hide, view the post logged out or from an unrelated account, or run the check in the Activity log.
 - **Select several and hide** them together, with **Undo**.
 - **Hide all negative**: hides every negative comment in view, in batches of 50, after a confirmation that shows the split (complaints, criticism, spam) and offers to skip complaints so they can be answered first.
 - **Reply** (new): reply publicly as the brand to any comment.
@@ -113,6 +113,13 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ---
 
 ## 7. Change history
+
+### 28 Sept 2026 (evening)
+- **Fix: opening a comment's post** from *All comments* now always opens that exact ad and platform. Before, if the ad wasn't in the part of the ad list already loaded (common with 100+ ads), the top ad opened instead.
+- **Fix: nothing spills out of its card:** long unbroken ad names and ID lists wrap; card subtitles are no longer cut off; the reply box fits on phones.
+- **Messages moved to the bottom centre** so they never cover the Hide / Reply buttons on the right.
+- **Every hide and unhide is logged** in the Activity log, with a Graph API check to confirm it with Meta, and the *Hidden · confirmed* tag explains who can still see a hidden comment.
+- **Fix: the `#_=_` Facebook adds to the address after login** is removed.
 
 ### 28 Sept 2026 (later)
 - **No more automatic re-fetching:** the app asks Meta only when you pick a time window or dates, press Refresh, or nothing is saved yet. Switching pages, views or tabs (and reloading) shows the saved copy, with when it was saved. Post and ad lists follow the same rule.
