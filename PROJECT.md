@@ -5,7 +5,7 @@ This file describes everything Comment Pulse does today, how it works, what's kn
 - **Live app:** https://comment-desk.vercel.app
 - **Code:** https://github.com/lovebhardwaj-commits/comment-desk
 - **Setup steps** (Meta app, Vercel, environment variables): see `README.md`
-- **Last updated:** 28 Sept 2026
+- **Last updated:** 29 Sept 2026
 
 ---
 
@@ -47,6 +47,14 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
   - **Reply & hide** on negative comments: posts the reply, then hides the comment.
   - The reply appears under the comment straight away and the comment is tagged *Brand replied*.
 - **Correct a category**: change it from the dropdown on the comment. The comment moves to its new category, and the built-in model learns from the correction.
+
+### Downloading comments (CSV)
+- **Download CSV** (next to Newest/Oldest) saves exactly the comments on screen: the chosen time window (24 hours, 7 days, 14 days or custom) and any category, platform or search filter. Brand replies are left out.
+- **One row per comment**, with the people who commented most at the top. Columns: `commenter, platform, comments_by_this_person, date, comment, bucket, type, needs_review, post_or_ad, link, hidden, brand_replied, is_reply, replying_to`.
+- *Bucket* is Enquiry, Positive or Negative; *type* is complaint, criticism or spam for negatives.
+- Facebook commenters show as *"Facebook user (name not shared by Meta)"* until App Review is approved; they can't be counted per person.
+- Opens correctly in Excel and Google Sheets (Hindi and emoji included). Comments that look like formulas are made safe.
+- If the data on screen is incomplete (limits hit, comments withheld by Meta) or filtered, a **note on the last line** of the file says so.
 
 ### Staying informed
 - **Status line** on every view: how fresh the data is, e.g. *Saved at 12:23 pm · press Refresh to check for new comments*, or how many posts were just updated.
@@ -105,7 +113,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 3. **Upstash Redis** so category corrections are kept permanently (setup step in Vercel).
 4. **Merchant picker**: choose a merchant once to set both its Page and ad account; searchable lists.
 5. **Link to the exact comment** on Instagram/Facebook, not just the post.
-6. **Export** (CSV / weekly summary) for merchants.
+6. **Weekly summary** for merchants (the CSV export is done).
 7. **Private replies** after App Review.
 8. **Automated tests and a lockfile**, so updates can't silently break things.
 9. **Meta App Review + System User**, then optional automation (e.g. auto-hide spam) in shadow mode first.
@@ -113,6 +121,9 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ---
 
 ## 7. Change history
+
+### 29 Sept 2026
+- **New: Download CSV** of the comments on screen (time window + filters), one row per comment, top commenters first, with bucket and type. Excel-ready, formula-safe, and marked when incomplete.
 
 ### 28 Sept 2026 (evening)
 - **Fix: opening a comment's post** from *All comments* now always opens that exact ad and platform. Before, if the ad wasn't in the part of the ad list already loaded (common with 100+ ads), the top ad opened instead.
