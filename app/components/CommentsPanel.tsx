@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, ChevronUp, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, ChevronUp, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
 import { logEvent } from "./log";
 import ReplyBox from "./ReplyBox";
 import { commentChecks, pageCheck, postCheck, hiddenCheck } from "./graphDebug";
+import { buildCsv, downloadCsv, csvName, type ExportRow } from "./exportCsv";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -667,6 +668,40 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     return out;
   }, [comments, results, filter, query, sort, showBrand, showHidden, moving, sinceMs, untilMs, plat]);
 
+  // ---------- CSV download: exactly the customer comments in view (window + filters), brand replies left out ----------
+  const exportable = visible.filter((c) => !c.isBrand);
+  const BUCKET: Record<string, string> = { Enquiry: "Enquiry", Positive: "Positive", Negative: "Negative" };
+  function exportCsv() {
+    const byId = new Map((comments || []).map((c) => [c.id, c]));
+    const rows: ExportRow[] = exportable.map((c) => {
+      const r = results[c.id];
+      const src = c.src;
+      return {
+        commenter: c.author, platform: platOf(c), time: c.time, text: c.text || "(sticker or image)",
+        bucket: r ? BUCKET[r.category] || "Not categorised" : "Not categorised",
+        type: r?.category === "Negative" ? (r.negative_type === "abuse" ? "criticism" : r.negative_type || "") : "",
+        needsReview: !!r?.needs_review,
+        post: src ? `${src.kind === "ad" ? "Ad · " : ""}${src.label || src.caption}` : target?.title || "",
+        link: (src ? src.permalink : target?.permalink) || "",
+        hidden: c.hidden, brandReplied: replied.has(c.id), isReply: !!c.parentId,
+        replyingTo: c.parentId ? byId.get(c.parentId)?.text || c.parentText || "" : "",
+      };
+    });
+    // Say so in the file when it's not the complete picture.
+    const s = sync.stats;
+    const gaps: string[] = [];
+    if (s?.capped) gaps.push("only the first posts/ads with comments were read");
+    if (sync.withheld?.facebook || sync.withheld?.instagram) gaps.push("Meta withheld comments on some posts");
+    if (sync.failed) gaps.push(`${sync.failed} could not be loaded`);
+    if (sync.skipped) gaps.push(`${sync.skipped} were skipped for time`);
+    if (sync.gap) gaps.push(`Meta counts ${sync.gap.reported} comments on this post but returned ${sync.gap.got}`);
+    const filters = [filter !== "All" ? `category: ${filter === "Review" ? "to review" : filter}` : "", plat !== "all" ? `platform: ${plat}` : "", query.trim() ? `search: "${query.trim()}"` : "", !showHidden ? "hidden comments left out" : ""].filter(Boolean);
+    const note = [gaps.length ? `This file may be incomplete: ${gaps.join("; ")}.` : "", filters.length ? `Filtered by ${filters.join(", ")}.` : ""].filter(Boolean).join(" ");
+    const scope = inbox ? [inbox.scope.split(" · ")[0], inbox.noun === "ad" ? "ad comments" : "post comments", inbox.label] : [target?.kind === "ad" ? "ad" : "post", target?.title || ""];
+    downloadCsv(buildCsv(rows, note || undefined), csvName([...scope, filter !== "All" ? filter : ""]));
+    toast({ kind: "ok", msg: `Downloaded ${rows.length} comment${rows.length === 1 ? "" : "s"}${note ? ". " + note : "."}` });
+  }
+
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
   const negBreakdown = {
@@ -813,6 +848,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <button aria-pressed={sort === "newest"} onClick={() => setSort("newest")}>Newest</button>
           <button aria-pressed={sort === "oldest"} onClick={() => setSort("oldest")}>Oldest</button>
         </div>
+        <button className="btn btn-sm" onClick={exportCsv} disabled={!exportable.length || !!progress || busyNow}
+          title={progress ? "Wait until every comment is categorised" : "Download the comments shown here (this time window and filters) as a CSV file"}>
+          <Download />{progress ? "Categorising…" : `Download CSV (${exportable.length})`}
+        </button>
         <span className="spacer" />
         {negativeTargets.length > 0 && !progress && (
           <button className="btn btn-sm btn-danger" onClick={() => { setHideAllResult(null); setHideAllOpen(true); }}>
