@@ -21,6 +21,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ### Viewing comments
 - **Post comments** and **Ad comments** are separate sections in the sidebar.
+- **Start screen:** Post comments → All comments. Clicking the **Comment Pulse logo** always returns here (it will point to the homepage once there is one).
+- **Back:** an **← Back** button above the page title returns to the previous screen, and the browser's own Back/Forward buttons move between screens too, instead of leaving the app. Going back reuses the saved comments, so nothing is fetched again. Clicking through posts inside *By post / By ad* doesn't add Back steps. The screen is kept in the address (e.g. `?view=ads&mode=by-ad`), so reloading stays on it.
 - Each has two views:
   - **All comments**: every comment in a time window across all posts (or all ads), newest first. This is the default.
   - **By post / By ad**: pick one post or ad and see all its comments.
@@ -121,6 +123,10 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ---
 
 ## 7. Change history
+
+### 29 Sept 2026 (later)
+- **New: Back.** An in-app **← Back** button, and the browser's Back/Forward now move between the app's screens instead of leaving the app. Reloading keeps you on the same screen.
+- **The Comment Pulse logo** now takes you to the start screen.
 
 ### 29 Sept 2026
 - **New: Download CSV** of the comments on screen (time window + filters), one row per comment, top commenters first, with bucket and type. Excel-ready, formula-safe, and marked when incomplete.
