@@ -127,6 +127,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ### 29 Sept 2026 (later)
 - **New: Back.** An in-app **← Back** button, and the browser's Back/Forward now move between the app's screens instead of leaving the app. Reloading keeps you on the same screen.
 - **The Comment Pulse logo** now takes you to the start screen.
+- **Fix: Refresh in *By post*** now really fetches the latest posts from Meta (it could quietly reuse the saved list).
+- **README corrected:** Upstash Redis is *recommended* (it keeps category corrections), not "only for Claude"; the file list includes the newer routes.
 
 ### 29 Sept 2026
 - **New: Download CSV** of the comments on screen (time window + filters), one row per comment, top commenters first, with bucket and type. Excel-ready, formula-safe, and marked when incomplete.

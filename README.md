@@ -41,11 +41,11 @@ In developers.facebook.com, open your existing app:
 | `CLASSIFIER` | Leave empty for the free built-in model. Set to `claude` to use Claude instead |
 | `ANTHROPIC_API_KEY` | Only needed with `CLASSIFIER=claude`. From console.anthropic.com |
 | `CLAUDE_MODEL` | Only with Claude: `claude-haiku-4-5-20251001` (cheaper) or `claude-sonnet-5` (stronger) |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Optional, only useful with Claude, see below |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Recommended: keeps your category corrections permanently (and caches Claude results) |
 
 3. **Deploy.** Then make sure `APP_URL` and the redirect URI in step 1.2 match the final domain exactly.
 
-**Cache (only for Claude):** in Vercel, **Storage / Marketplace → Upstash Redis → Create** (free tier is enough), and copy its REST URL and token into the two `UPSTASH_` variables. Without it, comments are re-categorised (and paid for) every time a post is opened on a fresh server instance.
+**Upstash Redis (recommended):** in Vercel, **Storage / Marketplace → Upstash Redis → Create** (free tier is enough), and copy its REST URL and token into the two `UPSTASH_` variables. It stores the corrections your team makes so the built-in model keeps learning, and (with Claude) caches results so they aren't paid for twice. Without it, corrections are lost whenever the server restarts.
 
 ## 3. Using it
 
@@ -61,6 +61,7 @@ In developers.facebook.com, open your existing app:
 - **Large posts:** up to about 2,000 comments per post are loaded.
 - **Login lasts about 60 days**, then Facebook asks again.
 - **Built-in model:** it can't use the parent comment for context, so replies like "Still not received" are harder for it; sarcasm and rare languages too. Comments it's unsure about are marked **Needs review**. The first request after a server starts takes about 2 seconds while it trains.
+- **Corrections:** use the category dropdown on any comment to fix it. The model learns from your correction on the next categorise request (identical comments are always labelled as you corrected them, and similar ones improve too). Corrections are only kept permanently with Upstash Redis (see above).
 - **Improving the built-in model:** add real comments with the correct label to `lib/local/examples.json` (format: `["comment text", "Enquiry"]`, labels: Enquiry, Positive, Complaint, Negative, Spam), then redeploy. Real comments from your pages improve it the most. Sentence patterns for any product are in `lib/local/templates.ts`.
 - **Claude prompt:** in `lib/prompt.ts`. When you change it, bump `PROMPT_VERSION` so old cached results aren't reused.
 
@@ -76,7 +77,12 @@ app/api/posts                Posts in a date range (Instagram /media, Facebook /
 app/api/ads                  Ads + ownership check for each ad's post
 app/api/comments             All comments and replies on one post
 app/api/classify             Categorisation (built-in model, or Claude)
-app/api/hide                 Hide / unhide one comment
+app/api/label                Save a category correction (the built-in model learns from it)
+app/api/hide                 Hide / unhide comments in batches, confirmed with Meta
+app/api/reply                Reply publicly as the brand (Instagram and Facebook)
+app/api/inbox/targets        "All comments": which posts/ads have comments, and coverage notes
+app/api/inbox/comments       "All comments": comments for changed posts, streamed
+app/api/diagnose/*           What Meta returns for one post (for troubleshooting)
 lib/graph.ts                 Graph API helper (adds appsecret_proof)
 lib/local/                   Built-in classifier: model, patterns, examples
 lib/prompt.ts                Claude prompt (only with CLASSIFIER=claude)
