@@ -11,7 +11,7 @@ export function BrandMark() {
   return <span className="brand-mark" aria-hidden><Activity /></span>;
 }
 
-export default function Shell({ view, onView, userName, children }: { view: View; onView: (v: View) => void; userName: string; children: ReactNode }) {
+export default function Shell({ view, onView, onHome, userName, children }: { view: View; onView: (v: View) => void; onHome?: () => void; userName: string; children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -38,13 +38,13 @@ export default function Shell({ view, onView, userName, children }: { view: View
     <div className={`shell${collapsed ? " collapsed" : ""}${mobileOpen ? " mobile-open" : ""}`}>
       <aside className="sidebar" aria-label="Main navigation">
         <div className="sidebar-top">
-          <div className="brand">
+          <button className="brand brand-link" onClick={() => { onHome?.(); setMobileOpen(false); }} title="Go to the start screen" aria-label="Comment Pulse: go to the start screen">
             <BrandMark />
             <div className="brand-text">
               <div className="brand-name">Comment Pulse</div>
               <div className="brand-sub">by Fastrr Ads</div>
             </div>
-          </div>
+          </button>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={toggle} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand" : "Collapse"}>
             <PanelLeft />
           </button>

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Instagram, Facebook, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList } from "lucide-react";
+import { Instagram, Facebook, RefreshCw, Store, Wallet, MessageCircle, ImageIcon, Megaphone, PlugZap, Inbox, Lock, LayoutList, ArrowLeft } from "lucide-react";
 import { api, fmtDate } from "./api";
 import Shell, { type View } from "./Shell";
 import CommentsPanel, { type Target, type Src } from "./CommentsPanel";
@@ -77,6 +77,83 @@ function App({ userName }: { userName: string }) {
   const postsForce = useRef(false);
   const [panelNonce, setPanelNonce] = useState(0);
   const pendingTarget = useRef<Target | null>(null);
+
+  // ---------- Back / Forward ----------
+  // Each screen (Post or Ad comments × All comments or By post/ad) is an entry in the browser's history, so the
+  // browser's Back button moves between screens instead of leaving the app. Picking another post inside a list
+  // replaces the entry rather than adding one, so Back always returns to the previous *screen*.
+  type NavState = { cp: 1; depth: number; view: View; postsMode: "inbox" | "list"; adsMode: "inbox" | "list"; target: Target | null; adId: string; platform: "instagram" | "facebook" };
+  const restoring = useRef(false);
+  const depth = useRef(0);
+  const screenKey = (s: { view: View; postsMode: string; adsMode: string }) => `${s.view}:${s.view === "posts" ? s.postsMode : s.adsMode}`;
+  const lastScreen = useRef("");
+  const urlFor = (s: { view: View; postsMode: string; adsMode: string }) => {
+    const q = new URLSearchParams(window.location.search);
+    q.set("view", s.view); q.set("mode", s.view === "posts" ? (s.postsMode === "list" ? "by-post" : "all") : (s.adsMode === "list" ? "by-ad" : "all"));
+    return `${window.location.pathname}?${q}`;
+  };
+  // Start where the address (or this tab's history) says, e.g. after a reload.
+  useEffect(() => {
+    const st = window.history.state as NavState | null;
+    const q = new URLSearchParams(window.location.search);
+    if (st?.cp) {
+      depth.current = st.depth;
+      setView(st.view); setPostsMode(st.postsMode); setAdsMode(st.adsMode); setPlatform(st.platform);
+      if (st.target) { pendingTarget.current = st.target; setTarget(st.target); }
+      setAdId(st.adId || "");
+      restoring.current = true;
+    } else if (q.get("view")) {
+      const v = q.get("view") === "ads" ? "ads" : "posts";
+      const m = q.get("mode") === "by-post" || q.get("mode") === "by-ad" ? "list" : "inbox";
+      setView(v); if (v === "posts") setPostsMode(m); else setAdsMode(m);
+      restoring.current = true;
+    }
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavState | null;
+      if (!s?.cp) return;
+      restoring.current = true;
+      depth.current = s.depth;
+      setView(s.view); setPostsMode(s.postsMode); setAdsMode(s.adsMode); setPlatform(s.platform);
+      pendingTarget.current = s.target;
+      setTarget(s.target); setAdId(s.adId || "");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Record each change: a new screen adds a history entry; anything else (e.g. another post) updates the current one.
+  useEffect(() => {
+    const now = { view, postsMode, adsMode };
+    const key = screenKey(now);
+    const st: NavState = { cp: 1, depth: depth.current, view, postsMode, adsMode, target, adId, platform };
+    if (restoring.current || !lastScreen.current) {
+      restoring.current = false;
+      window.history.replaceState(st, "", urlFor(now));
+    } else if (key !== lastScreen.current) {
+      depth.current += 1;
+      window.history.pushState({ ...st, depth: depth.current }, "", urlFor(now));
+    } else {
+      window.history.replaceState(st, "", urlFor(now));
+    }
+    lastScreen.current = key;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, postsMode, adsMode, target?.key, adId, platform]);
+
+  const atStart = view === "posts" && postsMode === "inbox";
+  /** In-app Back: the previous screen in this tab, or the screen "above" this one if there's no history yet. */
+  function goBack() {
+    if (depth.current > 0) { window.history.back(); return; }
+    if (view === "posts" && postsMode === "list") { setPostsMode("inbox"); setTarget(null); return; }
+    if (view === "ads" && adsMode === "list") { setAdsMode("inbox"); setTarget(null); setAdId(""); return; }
+    goHome();
+  }
+  /** The logo: back to the start screen (Post comments · All comments). */
+  function goHome() {
+    setView("posts"); setPostsMode("inbox"); setTarget(null); setAdId("");
+  }
+  const backBtn = !atStart ? (
+    <button className="btn btn-sm btn-ghost back-btn" onClick={goBack} title="Back to the previous screen"><ArrowLeft />Back</button>
+  ) : null;
 
   useEffect(() => {
     api<{ pages: PageAcc[]; missingPermissions: string[] }>("/api/accounts")
@@ -317,11 +394,12 @@ function App({ userName }: { userName: string }) {
   const noPages = pages?.length === 0;
 
   return (
-    <Shell view={view} onView={switchView} userName={userName}>
+    <Shell view={view} onView={switchView} onHome={goHome} userName={userName}>
       {view === "posts" ? (
         <>
           <header className="page-head">
             <div>
+              {backBtn}
               <h1 className="page-title">Post comments</h1>
               <p className="page-sub">{postsMode === "inbox" ? "Every new comment across your Instagram and Facebook posts, in one place." : "Every comment on your organic posts, sorted into Enquiry, Positive and Negative."}</p>
             </div>
@@ -417,6 +495,7 @@ function App({ userName }: { userName: string }) {
         <>
           <header className="page-head">
             <div>
+              {backBtn}
               <h1 className="page-title">Ad comments</h1>
               <p className="page-sub">{adsMode === "inbox" ? "Every new comment across all your ads, in one place." : "Comments on the posts behind your ads, where most complaints and spam land."}</p>
             </div>
