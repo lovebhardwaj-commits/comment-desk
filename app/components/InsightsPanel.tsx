@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Lightbulb, Copy, Check, Instagram, Facebook } from "lucide-react";
 import { api } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
@@ -26,7 +26,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   bucket: Bucket; comments: InsightComment[]; context: string; saveKey: string; onJump: (id: string) => void;
   /** Open comments per category, for the switcher. */
   counts?: Record<Bucket, number>;
-  /** Move to another category, or back to all comments (null). Without it, no switcher is shown. */
+  /** Move to another category, or back to all comments (null). Without it, the switcher uses the category cards above. */
   onSwitch?: (b: Bucket | null) => void;
 }) {
   const [setup, setSetup] = useState<{ configured: boolean; model?: string; missing?: string[] } | null>(null);
@@ -43,6 +43,24 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
     setSaved(null); setError(""); setOpen(true);
     cacheGet<Saved>(saveKey).then((c) => { if (c) { setSaved(c.value); setSavedAt(c.at); } });
   }, [saveKey]);
+
+  // Without onSwitch/counts from the parent, the switcher drives the category cards above the panel
+  // (the same buttons a person would click) and reads their numbers.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [cardCounts, setCardCounts] = useState<Record<Bucket, number> | null>(null);
+  const LABEL: Record<Bucket | "All", string> = { All: "Open", Enquiry: "Enquiry", Positive: "Positive", Negative: "Negative" };
+  const cardFor = (b: Bucket | "All") => {
+    const scope = cardRef.current?.closest(".panel-content") || document;
+    return [...scope.querySelectorAll<HTMLButtonElement>(".kpi")].find((k) => k.querySelector(".kpi-label")?.textContent?.trim().toLowerCase() === LABEL[b].toLowerCase());
+  };
+  useEffect(() => {
+    if (counts) return;
+    const read = (b: Bucket) => Number((cardFor(b)?.querySelector(".kpi-value")?.textContent || "0").replace(/[^0-9]/g, "")) || 0;
+    setCardCounts({ Enquiry: read("Enquiry"), Positive: read("Positive"), Negative: read("Negative") });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [counts, bucket, comments.length]);
+  const shownCounts = counts || cardCounts;
+  const switchTo = (b: Bucket | null) => (onSwitch ? onSwitch(b) : cardFor(b || "All")?.click());
 
   const byId = new Map(comments.map((c) => [c.id, c]));
   const enough = comments.filter((c) => c.text.trim()).length >= 3;
@@ -77,12 +95,12 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   }
 
   // Switch between categories (each keeps its own saved analysis) or go back to all comments.
-  const switcher = onSwitch && counts && (
+  const switcher = (
     <div className="ai-switch" role="group" aria-label="Analyse another category">
-      <button onClick={() => onSwitch(null)} title="Back to all comments">All comments</button>
+      <button onClick={() => switchTo(null)} title="Back to all comments">All comments</button>
       {(["Enquiry", "Positive", "Negative"] as const).map((b) => (
-        <button key={b} aria-pressed={b === bucket} onClick={() => b !== bucket && onSwitch(b)} disabled={running}>
-          {b === "Enquiry" ? "Enquiries" : b} <span className="n">{counts[b].toLocaleString("en-IN")}</span>
+        <button key={b} aria-pressed={b === bucket} onClick={() => b !== bucket && switchTo(b)} disabled={running}>
+          {b === "Enquiry" ? "Enquiries" : b}{shownCounts && <span className="n">{shownCounts[b].toLocaleString("en-IN")}</span>}
         </button>
       ))}
     </div>
@@ -91,7 +109,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   // ---------- Not set up ----------
   if (setup && !setup.configured) {
     return (
-      <div className="ai-card ai-muted">
+      <div className="ai-card ai-muted" ref={cardRef}>
         {switcher}
         <div className="ai-head"><Sparkles /><strong>{ASK[bucket]}</strong></div>
         <div className="ai-note">AI analysis isn&apos;t switched on yet. Add {setup.missing?.length ? setup.missing.join(" and ") : "the OpenRouter settings"} in Vercel (Settings → Environment Variables), then redeploy. Steps are in the README.</div>
@@ -101,7 +119,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
 
   const r = saved?.result;
   return (
-    <div className="ai-card">
+    <div className="ai-card" ref={cardRef}>
       {switcher}
       <div className="ai-head">
         <Sparkles /><strong>{ASK[bucket]}</strong>
