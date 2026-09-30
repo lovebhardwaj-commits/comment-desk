@@ -142,3 +142,36 @@
 .brand-link:hover .brand-name { color: #fff; }
 .brand-link:focus-visible { outline: 2px solid var(--violet-line); outline-offset: 4px; }
 .back-btn { margin: 0 0 6px; }
+
+/* ---------- AI analysis ("Why are people saying this?") ---------- */
+.ai-card { margin: 0 0 16px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--violet-line); background: linear-gradient(180deg, var(--violet-soft), transparent 60%), var(--surface); display: grid; gap: 10px; min-width: 0; }
+.ai-card.ai-muted { border-color: var(--line-2); background: var(--surface); }
+.ai-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ai-head > svg { width: 17px; height: 17px; color: var(--violet); flex-shrink: 0; }
+.ai-head .spacer { flex: 1; }
+.ai-meta { font-size: 12px; color: var(--muted); }
+.ai-note { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.ai-note.warn { color: var(--warn); }
+.ai-error { font-size: 13px; color: var(--negative); overflow-wrap: anywhere; }
+.ai-summary { margin: 0; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
+.ai-themes { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.ai-theme { padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); display: grid; gap: 6px; min-width: 0; align-content: start; }
+.ai-theme-head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.ai-theme-head b { font-size: 13.5px; color: var(--ink); overflow-wrap: anywhere; }
+.ai-count { font-size: 12px; color: var(--muted); white-space: nowrap; font-weight: 600; }
+.ai-bar { height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.ai-bar i { display: block; height: 100%; background: var(--violet); border-radius: 4px; }
+.ai-expl { font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.ai-sugg { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; color: var(--positive); overflow-wrap: anywhere; }
+.ai-sugg svg { width: 14px; height: 14px; margin-top: 2px; flex-shrink: 0; }
+.ai-examples { display: grid; gap: 4px; }
+.ai-example { display: flex; gap: 6px; align-items: flex-start; text-align: left; width: 100%; padding: 5px 8px; border-radius: 8px; border: 1px solid transparent; background: var(--surface); color: var(--ink-2); font-size: 12px; min-width: 0; }
+.ai-example:hover { border-color: var(--violet-line); color: var(--ink); }
+.ai-example svg { width: 12px; height: 12px; margin-top: 2px; flex-shrink: 0; color: var(--faint); }
+.ai-ex-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ai-ex-who { color: var(--faint); white-space: nowrap; max-width: 30%; overflow: hidden; text-overflow: ellipsis; }
+.ai-foot { font-size: 11.5px; color: var(--faint); overflow-wrap: anywhere; }
+.ai-prompt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+.ai-prompt > svg { width: 15px; height: 15px; color: var(--violet); }
+.spinner.sm { width: 14px; height: 14px; border-width: 2px; }
+article.comment.flash { box-shadow: 0 0 0 2px var(--violet); transition: box-shadow .3s; }

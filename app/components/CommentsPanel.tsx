@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, ChevronUp, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, ChevronUp, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download, Sparkles } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
@@ -8,6 +8,7 @@ import { logEvent } from "./log";
 import ReplyBox from "./ReplyBox";
 import { commentChecks, pageCheck, postCheck, hiddenCheck } from "./graphDebug";
 import { buildCsv, downloadCsv, csvName, type ExportRow } from "./exportCsv";
+import InsightsPanel, { type InsightComment } from "./InsightsPanel";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -702,6 +703,23 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     toast({ kind: "ok", msg: `Downloaded ${rows.length} comment${rows.length === 1 ? "" : "s"}${note ? ". " + note : "."}` });
   }
 
+  // ---------- AI analysis: the customer comments in view, for the chosen category ----------
+  const aiBucket = filter === "Enquiry" || filter === "Positive" || filter === "Negative" ? filter : null;
+  const aiComments: InsightComment[] = aiBucket ? exportable.filter((c) => c.text.trim()).map((c) => ({
+    id: c.id, text: c.text, author: c.author, platform: platOf(c),
+    post: c.src ? c.src.caption || c.src.label : target?.caption || "", type: results[c.id]?.negative_type || undefined,
+  })) : [];
+  const aiContext = inbox ? `${inbox.scope}, ${inbox.label}` : `${target?.kind === "ad" ? "Ad" : "Post"}: ${(target?.caption || target?.title || "").slice(0, 120)}`;
+  const aiKey = `insights:${cacheKey}:${inbox ? inbox.key : target?.key}:${filter}:${plat}:${query.trim().toLowerCase()}:${showHidden ? 1 : 0}`;
+  /** Scrolls to a comment in the list and highlights it briefly. */
+  function jumpTo(id: string) {
+    const el = document.querySelector(`article.comment[data-cid="${CSS.escape(id)}"]`);
+    if (!el) { toast({ kind: "err", msg: "That comment isn't in the list right now (a filter may be hiding it)." }); return; }
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1600);
+  }
+
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
   const negBreakdown = {
@@ -831,6 +849,17 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         </div>
       )}
 
+      {aiBucket ? (
+        <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />
+      ) : filter === "All" && comments && customer.length >= 3 && !progress ? (
+        <div className="ai-prompt">
+          <Sparkles />Why are people saying this?
+          {(["Enquiry", "Positive", "Negative"] as const).filter((b) => counts[b] > 0).map((b) => (
+            <button key={b} className="btn btn-sm btn-ghost" onClick={() => setFilter(b)}>{b === "Enquiry" ? "Enquiries" : b} ({counts[b]})</button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="toolbar">
         <label className="search">
           <Search />
@@ -958,7 +987,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           const r = results[c.id];
           const isSel = selected.has(c.id);
           return (
-            <article key={c.id} className={`comment${c.parentId ? " is-reply" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}${moving[c.id] ? " moving" : ""}`}>
+            <article key={c.id} data-cid={c.id} className={`comment${c.parentId ? " is-reply" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}${moving[c.id] ? " moving" : ""}`}>
               <div className="c-side">
                 <span className="avatar">{c.isBrand ? <BadgeCheck size={15} /> : initials(c.author)}</span>
                 {c.canHide && !c.hidden && (
