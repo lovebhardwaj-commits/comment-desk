@@ -25,9 +25,9 @@ const ASK: Record<Bucket, string> = { Enquiry: "What are people asking?", Positi
 export default function InsightsPanel({ bucket, comments, context, saveKey, onJump, counts, onSwitch }: {
   bucket: Bucket; comments: InsightComment[]; context: string; saveKey: string; onJump: (id: string) => void;
   /** Open comments per category, for the switcher. */
-  counts: Record<Bucket, number>;
-  /** Move to another category, or back to all comments (null). */
-  onSwitch: (b: Bucket | null) => void;
+  counts?: Record<Bucket, number>;
+  /** Move to another category, or back to all comments (null). Without it, no switcher is shown. */
+  onSwitch?: (b: Bucket | null) => void;
 }) {
   const [setup, setSetup] = useState<{ configured: boolean; model?: string; missing?: string[] } | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -77,7 +77,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   }
 
   // Switch between categories (each keeps its own saved analysis) or go back to all comments.
-  const switcher = (
+  const switcher = onSwitch && counts && (
     <div className="ai-switch" role="group" aria-label="Analyse another category">
       <button onClick={() => onSwitch(null)} title="Back to all comments">All comments</button>
       {(["Enquiry", "Positive", "Negative"] as const).map((b) => (
