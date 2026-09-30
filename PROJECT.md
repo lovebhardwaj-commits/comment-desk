@@ -5,7 +5,7 @@ This file describes everything Comment Pulse does today, how it works, what's kn
 - **Live app:** https://comment-desk.vercel.app
 - **Code:** https://github.com/lovebhardwaj-commits/comment-desk
 - **Setup steps** (Meta app, Vercel, environment variables): see `README.md`
-- **Last updated:** 29 Sept 2026
+- **Last updated:** 30 Sept 2026
 
 ---
 
@@ -58,6 +58,14 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - Opens correctly in Excel and Google Sheets (Hindi and emoji included). Comments that look like formulas are made safe.
 - If the data on screen is incomplete (limits hit, comments withheld by Meta) or filtered, a **note on the last line** of the file says so.
 
+### Why are people saying this? (AI analysis)
+- On the **Enquiry, Positive or Negative** view, a panel groups the comments on screen into **3–6 themes**: *"What are people asking?"*, *"Why are people happy?"*, *"What's going wrong?"*. From the **All** view, a small bar offers the three categories.
+- Each theme shows **how many comments** it covers (and the share), a one-line explanation, **up to 3 real example comments** (click one to jump to it in the list), and for enquiries and negatives a **practical suggestion** (e.g. *"Mention delivery days and COD in the ad"*).
+- **Nothing is invented:** the app sends each comment with a short reference and checks the answer. Themes or examples that don't point at real comments are dropped, and each comment is counted once. Example text is shown from the app's own copy of the comment, not from the AI's reply.
+- **Only runs when you click** *Analyse*. Uses the comments on screen (same time window and filters as the CSV), up to 400 per run; bigger sets are sampled evenly across the period, and the panel says so.
+- **Saved with the view**, so reopening it costs nothing; if new comments arrive, the panel says how many and offers **Re-run**. **Copy** puts the analysis on the clipboard as text.
+- Every run (model, number of comments, tokens and cost if OpenRouter reports it) and every failure goes to the **Activity log**. If it isn't set up in Vercel, the panel says which settings are missing.
+
 ### Staying informed
 - **Status line** on every view: how fresh the data is, e.g. *Saved at 12:23 pm · press Refresh to check for new comments*, or how many posts were just updated.
 - **Refresh button** (labelled) next to the date controls: the one-click way to get the latest comments.
@@ -77,6 +85,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 5. **Checks against Meta's count**: if Meta says a post has comments but far fewer come back, the app doesn't trust the saved copy, fetches again, and warns if it's still short.
 6. **Categorising**: a built-in model (free, runs on the server) sorts each comment. It understands English, Hindi and Hinglish. Corrections from the team are fed back in. It can be switched to Claude (paid) with a setting.
 7. **Ads**: active ads are always read first, then paused ones. Each ad's post is read in batches of 50 per Meta call.
+8. **AI analysis**: when you click *Analyse*, the server sends the comments on screen (up to 400, each cut to 300 characters) to the model set in `OPENROUTER_MODEL`, through OpenRouter. The model is told the comments are data, not instructions (so a comment can't hijack it). Its answer is checked against the comments sent before anything is shown. The key never reaches the browser.
 
 ---
 
@@ -94,21 +103,44 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 | Category corrections are lost when the server restarts | Needs Upstash Redis | Add Upstash Redis in Vercel |
 | Only people with a role on the Meta app can log in; no webhooks | Meta app is in Development mode | Business Verification + App Review |
 | Everything runs on each person's own Facebook login | No System User yet | System User token (planned) |
+| AI analysis reads at most 400 comments per run (an even sample of bigger sets), and its themes are the model's reading | Keeps each run fast and cheap, within Vercel's 60-second limit | Filter to a narrower set (e.g. one platform) for a closer look; counts and examples are always checked |
 
 ---
 
-## 5. Decisions and principles
+## 5. Vercel settings
+
+Every environment variable the app uses, and when it was added. **After changing any of these, redeploy** (Vercel only applies them to new deployments).
+
+| Variable | Needed? | What it does | Added |
+|---|---|---|---|
+| `META_APP_ID`, `META_APP_SECRET` | Required | The Meta app | From the start |
+| `META_LOGIN_CONFIG_ID` | Optional | Facebook Login for Business configuration | From the start |
+| `GRAPH_VERSION` | Required | Meta Graph API version (`v25.0`) | From the start |
+| `APP_URL` | Required | The app's public address | From the start |
+| `SESSION_SECRET` | Required | Encrypts the login cookie | From the start |
+| `CLASSIFIER`, `ANTHROPIC_API_KEY`, `CLAUDE_MODEL` | Optional | Use Claude instead of the built-in model for categorising | From the start |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Recommended | Keeps category corrections permanently | From the start |
+| `OPENROUTER_API_KEY` | Optional | Switches on AI analysis ("Why are people saying this?") | 30 Sept 2026 |
+| `OPENROUTER_MODEL` | With the key | Which AI model to use, as named on openrouter.ai/models (e.g. a Grok model) | 30 Sept 2026 |
+| `OPENROUTER_BASE_URL` | No, leave empty | Only for testing against another server | 30 Sept 2026 |
+
+**Also outside Vercel, for AI analysis:** set a credit limit on the OpenRouter key; in OpenRouter *Settings → Privacy*, turn off prompt logging and allow only providers that don't train on or keep data; and mention in the privacy policy that comments you choose to analyse are processed by OpenRouter and the AI provider it routes to.
+
+---
+
+## 6. Decisions and principles
 
 - **Show, don't hide, problems.** Anything the app couldn't read is reported in plain words and logged with IDs, never silently dropped.
 - **Numbers must add up on screen.** Every total can be traced back to Meta's count.
 - **Never trust a failed or partial fetch as the truth.** Short copies are refetched and flagged.
-- **Humans decide.** No automatic hiding or replying.
+- **Humans decide.** No automatic hiding or replying, and AI analysis only runs when someone clicks.
+- **AI output is checked, not trusted.** Every theme must point at real comments; examples are shown from our own copy of the comments.
 - **Avoid identical bulk replies.** Meta treats them as spam and can restrict the account; replies are sent one by one.
 - **Before every code push, GitHub's latest commit is checked** against the last known one, so nothing gets overwritten.
 
 ---
 
-## 6. Roadmap (next up)
+## 7. Roadmap (next up)
 
 1. **Audit log**: who hid, replied to or recategorised what, and when (shared, not per browser).
 2. **Reply to several selected comments** one after another, with variations and a pause between sends (not identical bulk replies).
@@ -122,7 +154,12 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ---
 
-## 7. Change history
+## 8. Change history
+
+### 30 Sept 2026
+- **New: Why are people saying this? (AI analysis).** On the Enquiry, Positive or Negative view, groups the comments on screen into themes with counts, real example comments (click to jump to them) and suggestions. Runs through OpenRouter with the model set in Vercel; every answer is checked against the real comments; results are saved per view; runs and failures are logged.
+- **Vercel:** new optional settings `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (and `OPENROUTER_BASE_URL`, for testing only). See *Vercel settings*.
+- **New section in this file: Vercel settings**, listing every setting the app uses.
 
 ### 29 Sept 2026 (later)
 - **New: Back.** An in-app **← Back** button, and the browser's Back/Forward now move between the app's screens instead of leaving the app. Reloading keeps you on the same screen.
@@ -175,6 +212,6 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ---
 
-## 8. How to update this file
+## 9. How to update this file
 
-With every change: add a dated entry to **Change history**, update **What you can do today** and **Known limits** if they changed, and move finished items off the **Roadmap**.
+With every change: add a dated entry to **Change history**, update **What you can do today** and **Known limits** if they changed, add any new environment variable to **Vercel settings**, and move finished items off the **Roadmap**.
