@@ -22,8 +22,12 @@ const NOUN: Record<Bucket, string> = { Enquiry: "enquiries", Positive: "positive
 const ASK: Record<Bucket, string> = { Enquiry: "What are people asking?", Positive: "Why are people happy?", Negative: "What's going wrong?" };
 
 /** "Why are people saying this?" for one category: themes, counts, real example comments and suggestions. */
-export default function InsightsPanel({ bucket, comments, context, saveKey, onJump }: {
+export default function InsightsPanel({ bucket, comments, context, saveKey, onJump, counts, onSwitch }: {
   bucket: Bucket; comments: InsightComment[]; context: string; saveKey: string; onJump: (id: string) => void;
+  /** Open comments per category, for the switcher. */
+  counts: Record<Bucket, number>;
+  /** Move to another category, or back to all comments (null). */
+  onSwitch: (b: Bucket | null) => void;
 }) {
   const [setup, setSetup] = useState<{ configured: boolean; model?: string; missing?: string[] } | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -72,10 +76,23 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
   }
 
+  // Switch between categories (each keeps its own saved analysis) or go back to all comments.
+  const switcher = (
+    <div className="ai-switch" role="group" aria-label="Analyse another category">
+      <button onClick={() => onSwitch(null)} title="Back to all comments">All comments</button>
+      {(["Enquiry", "Positive", "Negative"] as const).map((b) => (
+        <button key={b} aria-pressed={b === bucket} onClick={() => b !== bucket && onSwitch(b)} disabled={running}>
+          {b === "Enquiry" ? "Enquiries" : b} <span className="n">{counts[b].toLocaleString("en-IN")}</span>
+        </button>
+      ))}
+    </div>
+  );
+
   // ---------- Not set up ----------
   if (setup && !setup.configured) {
     return (
       <div className="ai-card ai-muted">
+        {switcher}
         <div className="ai-head"><Sparkles /><strong>{ASK[bucket]}</strong></div>
         <div className="ai-note">AI analysis isn&apos;t switched on yet. Add {setup.missing?.length ? setup.missing.join(" and ") : "the OpenRouter settings"} in Vercel (Settings → Environment Variables), then redeploy. Steps are in the README.</div>
       </div>
@@ -85,12 +102,13 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   const r = saved?.result;
   return (
     <div className="ai-card">
+      {switcher}
       <div className="ai-head">
         <Sparkles /><strong>{ASK[bucket]}</strong>
         {r && <span className="ai-meta">{r.analysed.toLocaleString("en-IN")} {NOUN[bucket]}{r.sampled ? ` (an even sample of ${r.total.toLocaleString("en-IN")})` : ""} · {ago(savedAt || Date.parse(r.at))}</span>}
         <span className="spacer" />
         {r && <button className="btn btn-sm btn-ghost" onClick={copy} title="Copy this analysis as text">{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy"}</button>}
-        {r && <button className="btn btn-sm btn-ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? <ChevronUp /> : <ChevronDown />}{open ? "Hide" : "Show"}</button>}
+        {r && <button className="btn btn-sm btn-ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? <ChevronUp /> : <ChevronDown />}{open ? "Hide themes" : `Show ${r.themes.length} themes`}</button>}
         <button className={`btn btn-sm${r ? "" : " btn-primary"}`} onClick={run} disabled={running || !enough || !setup}
           title={!enough ? "Needs at least 3 comments with text" : r ? "Analyse again with the comments shown now" : `Group these ${NOUN[bucket]} into themes with AI`}>
           {running ? <span className="spinner sm" aria-hidden /> : r ? <RefreshCw /> : <Sparkles />}
@@ -100,7 +118,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
 
       {!r && !running && !error && (
         <div className="ai-note">
-          {enough ? <>Groups the {NOUN[bucket]} shown here into themes, with how many comments are in each and real examples. Only runs when you click, and uses the AI model set in Vercel{setup?.model ? ` (${setup.model})` : ""}.</>
+          {enough ? <>Groups the {NOUN[bucket]} shown here into themes, with how many comments are in each and real examples.</>
             : <>Needs at least 3 {NOUN[bucket]} with text in this view. Try a longer time window.</>}
         </div>
       )}
@@ -135,8 +153,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
           </div>
           <div className="ai-foot">
             {r.unassigned > 0 && <span>{r.unassigned} comment{r.unassigned === 1 ? "" : "s"} didn&apos;t fit a theme. </span>}
-            Counts and examples are checked against the real comments. Themes are written by AI ({r.model}), so read them as a guide.
-            {r.usage?.cost != null && <> Cost of this run: ${r.usage.cost.toFixed(4)}.</>}
+            Counts and examples are checked against the real comments. Themes are written by AI, so read them as a guide.
           </div>
         </>
       )}
