@@ -42,10 +42,23 @@ In developers.facebook.com, open your existing app:
 | `ANTHROPIC_API_KEY` | Only needed with `CLASSIFIER=claude`. From console.anthropic.com |
 | `CLAUDE_MODEL` | Only with Claude: `claude-haiku-4-5-20251001` (cheaper) or `claude-sonnet-5` (stronger) |
 | `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Recommended: keeps your category corrections permanently (and caches Claude results) |
+| `OPENROUTER_API_KEY` | Optional: switches on AI analysis ("Why are people saying this?"). From openrouter.ai/keys |
+| `OPENROUTER_MODEL` | Needed with the key: the model to use, from openrouter.ai/models (e.g. a Grok model) |
+| `OPENROUTER_BASE_URL` | Optional, leave empty. Only for testing against another OpenRouter-compatible server |
 
 3. **Deploy.** Then make sure `APP_URL` and the redirect URI in step 1.2 match the final domain exactly.
 
 **Upstash Redis (recommended):** in Vercel, **Storage / Marketplace → Upstash Redis → Create** (free tier is enough), and copy its REST URL and token into the two `UPSTASH_` variables. It stores the corrections your team makes so the built-in model keeps learning, and (with Claude) caches results so they aren't paid for twice. Without it, corrections are lost whenever the server restarts.
+
+**AI analysis (optional):** the *Why are people saying this?* panel groups comments into themes using an AI model through OpenRouter. To switch it on:
+
+1. In OpenRouter (openrouter.ai): create or pick a key under **Keys**, and **set a credit limit on it** so a mistake can't run up a bill.
+2. In OpenRouter **Settings → Privacy**: turn off logging of prompts, and allow only providers that don't train on or keep your data. Comments are customers' words, so this matters.
+3. In Vercel: **Project → Settings → Environment Variables**, add `OPENROUTER_API_KEY` (the key) and `OPENROUTER_MODEL` (the model's exact name as shown on openrouter.ai/models) for **Production** (and Preview if you use it).
+4. **Redeploy** (Deployments → ⋯ → Redeploy). Vercel only picks up new variables on a new deployment.
+5. Update your **privacy policy**: comments you choose to analyse are sent to OpenRouter and the AI provider it routes to.
+
+To change the model later, edit `OPENROUTER_MODEL` and redeploy. To switch the feature off, remove `OPENROUTER_API_KEY` and redeploy; the panel then says it isn't set up.
 
 ## 3. Using it
 
@@ -83,7 +96,9 @@ app/api/reply                Reply publicly as the brand (Instagram and Facebook
 app/api/inbox/targets        "All comments": which posts/ads have comments, and coverage notes
 app/api/inbox/comments       "All comments": comments for changed posts, streamed
 app/api/diagnose/*           What Meta returns for one post (for troubleshooting)
+app/api/insights             AI analysis: themes for a set of comments, checked against the real comments
 lib/graph.ts                 Graph API helper (adds appsecret_proof)
 lib/local/                   Built-in classifier: model, patterns, examples
 lib/prompt.ts                Claude prompt (only with CLASSIFIER=claude)
+lib/insights.ts              AI analysis through OpenRouter: sampling, prompt, and checking the answer
 ```
