@@ -112,6 +112,8 @@ const KPI: { key: Filter; label: string; color: string }[] = [
 ];
 
 const CHUNK = 100;
+/** Numbers the same way everywhere: 1,094 not 1094. */
+const fmtN = (n: number) => n.toLocaleString("en-IN");
 
 type HideResult = { id: string; ok: boolean; verified: boolean; hidden: boolean; error?: string };
 const BATCH = 50;
@@ -620,21 +622,21 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const spam = visible.filter((c) => results[c.id]?.negative_type === "spam" && c.canHide);
     if (complaints.length) return {
       tone: "danger", tag: "Needs attention",
-      title: `${complaints.length} ${complaints.length === 1 ? "customer has" : "customers have"} an order or product problem`,
+      title: `${fmtN(complaints.length)} ${complaints.length === 1 ? "customer has" : "customers have"} an order or product problem`,
       body: "Hiding a complaint doesn't remove it for the customer: they and their friends can still see it.",
       action: "→ Reply or send a DM first, then hide if it's still public.",
       button: { label: "Show negatives", run: () => setFilter("Negative") },
     };
     if (spam.length) return {
       tone: "info", tag: "Info",
-      title: `${spam.length} spam ${spam.length === 1 ? "comment" : "comments"} can be hidden`,
+      title: `${fmtN(spam.length)} spam ${spam.length === 1 ? "comment" : "comments"} can be hidden`,
       body: "Promotions, scams and bots make real questions harder to find.",
       action: "→ Review and hide them in one go.",
       button: { label: "Select spam", run: () => { setFilter("Negative"); setSelected(new Set(spam.map((c) => c.id))); } },
     };
     if (openEnq.length) return {
       tone: "info", tag: "Info",
-      title: `${openEnq.length} ${openEnq.length === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
+      title: `${fmtN(openEnq.length)} ${openEnq.length === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
       body: "People asking about price, sizes or delivery are the closest to buying.",
       action: "→ Reply while interest is fresh.",
       button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
@@ -649,7 +651,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const q = query.trim().toLowerCase();
     const list = (comments || []).filter((c) => {
       if (!inWin(c)) return false;
-      if (c.isBrand) return showBrand && filter === "All" && !q;
+      if (c.isBrand) return false; // added below, under the comment they answer
       if (c.hidden && !showHidden) return false;
       if (q && !c.text.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
       if (filter === "All") return true;
@@ -658,6 +660,15 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       if (filter === "Review") return !!r?.needs_review;
       return r?.category === filter;
     });
+    // Brand replies (toggle on): under any comment in view, whatever the category or search. On "All" without a search,
+    // brand comments that don't answer anyone are shown too.
+    if (showBrand) {
+      const shown = new Set(list.map((c) => c.id));
+      for (const c of comments || []) {
+        if (!c.isBrand || !inWin(c)) continue;
+        if (c.parentId ? shown.has(c.parentId) : filter === "All" && !q) list.push(c);
+      }
+    }
     // Keep replies under their parent comment; sort top-level comments.
     const top = list.filter((c) => !c.parentId || !list.some((p) => p.id === c.parentId));
     top.sort((a, b) => (sort === "newest" ? 1 : -1) * (Date.parse(b.time) - Date.parse(a.time)));
@@ -705,12 +716,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
   // ---------- AI analysis: the customer comments in view, for the chosen category ----------
   const aiBucket = filter === "Enquiry" || filter === "Positive" || filter === "Negative" ? filter : null;
-  const aiComments: InsightComment[] = aiBucket ? exportable.filter((c) => c.text.trim()).map((c) => ({
+  const aiComments: InsightComment[] = aiBucket ? exportable.filter((c) => !c.hidden && c.text.trim()).map((c) => ({
     id: c.id, text: c.text, author: c.author, platform: platOf(c),
     post: c.src ? c.src.caption || c.src.label : target?.caption || "", type: results[c.id]?.negative_type || undefined,
   })) : [];
   const aiContext = inbox ? `${inbox.scope}, ${inbox.label}` : `${target?.kind === "ad" ? "Ad" : "Post"}: ${(target?.caption || target?.title || "").slice(0, 120)}`;
-  const aiKey = `insights:${cacheKey}:${inbox ? inbox.key : target?.key}:${filter}:${plat}:${query.trim().toLowerCase()}:${showHidden ? 1 : 0}`;
+  const aiKey = `insights:${cacheKey}:${inbox ? inbox.key : target?.key}:${filter}:${plat}:${query.trim().toLowerCase()}`;
   /** Scrolls to a comment in the list and highlights it briefly. */
   function jumpTo(id: string) {
     const el = document.querySelector(`article.comment[data-cid="${CSS.escape(id)}"]`);
@@ -816,9 +827,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           const n = counts[k.key];
           const share = counts.All ? Math.round((100 * n) / counts.All) : 0;
           return (
-            <button key={k.key} className="kpi" aria-pressed={filter === k.key} onClick={() => setFilter(k.key)} style={{ ["--k" as any]: k.color }}>
+            <button key={k.key} className="kpi" aria-pressed={filter === k.key} onClick={() => setFilter(k.key)} style={{ ["--k" as any]: k.color }}
+              title={k.key === "All" ? "Show all comments" : k.key === "Review" ? "Show comments the model wasn't sure about" : `Show only ${k.label.toLowerCase()} comments`}>
               <div className="kpi-label" title={k.key === "All" ? "Customer comments that are still visible on Instagram or Facebook. Hidden comments and the brand's own replies aren't counted." : undefined}><i />{k.label}</div>
-              <div className="kpi-value">{comments ? n : "–"}</div>
+              <div className="kpi-value">{comments ? n.toLocaleString("en-IN") : "–"}</div>
               <div className="kpi-sub">
                 {k.key === "All"
                   ? (progress ? "Categorising…"
@@ -850,7 +862,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       )}
 
       {aiBucket ? (
-        <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />
+        <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo}
+          counts={{ Enquiry: counts.Enquiry, Positive: counts.Positive, Negative: counts.Negative }} onSwitch={(b) => setFilter(b || "All")} />
       ) : filter === "All" && comments && customer.length >= 3 && !progress ? (
         <div className="ai-prompt">
           <Sparkles />Why are people saying this?
@@ -869,8 +882,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         {inbox && (
           <div className="seg" role="group" aria-label="Platform">
             <button aria-pressed={plat === "all"} onClick={() => setPlat("all")}>All</button>
-            <button aria-pressed={plat === "instagram"} onClick={() => setPlat("instagram")}><Instagram />{platCounts.instagram}</button>
-            <button aria-pressed={plat === "facebook"} onClick={() => setPlat("facebook")}><Facebook />{platCounts.facebook}</button>
+            <button aria-pressed={plat === "instagram"} onClick={() => setPlat("instagram")}><Instagram />{platCounts.instagram.toLocaleString("en-IN")}</button>
+            <button aria-pressed={plat === "facebook"} onClick={() => setPlat("facebook")}><Facebook />{platCounts.facebook.toLocaleString("en-IN")}</button>
           </div>
         )}
         <div className="seg" role="group" aria-label="Sort">
@@ -878,19 +891,19 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <button aria-pressed={sort === "oldest"} onClick={() => setSort("oldest")}>Oldest</button>
         </div>
         <button className="btn btn-sm" onClick={exportCsv} disabled={!exportable.length || !!progress || busyNow}
-          title={progress ? "Wait until every comment is categorised" : "Download the comments shown here (this time window and filters) as a CSV file"}>
-          <Download />{progress ? "Categorising…" : `Download CSV (${exportable.length})`}
+          title={progress ? "Wait until every comment is categorised" : `Download the comments shown here (this time window and filters) as a CSV file${hiddenCounts.All && showHidden ? `, including ${hiddenCounts.All} hidden` : ""}`}>
+          <Download />{progress ? "Categorising…" : `Download CSV (${exportable.length.toLocaleString("en-IN")})`}
         </button>
         <span className="spacer" />
         {negativeTargets.length > 0 && !progress && (
           <button className="btn btn-sm btn-danger" onClick={() => { setHideAllResult(null); setHideAllOpen(true); }}>
-            <EyeOff />Hide all negative ({negativeTargets.length})
+            <EyeOff />Hide all negative ({fmtN(negativeTargets.length)})
           </button>
         )}
         {hiddenCounts.All > 0 && (
           <label className="toggle" title="Comments already hidden on Instagram or Facebook">
             <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
-            <span className="track" />Hidden ({hiddenCounts.All})
+            <span className="track" />Hidden ({fmtN(hiddenCounts.All)})
           </label>
         )}
         <label className="toggle">
@@ -907,10 +920,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
       {selectedHideable.length > 0 && (
         <div className="bulkbar" role="region" aria-label="Bulk actions">
-          <strong>{selectedHideable.length} selected</strong>
+          <strong>{fmtN(selectedHideable.length)} selected</strong>
           <span className="spacer" />
           <button className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())}>Clear</button>
-          <button className="btn btn-sm btn-primary" onClick={() => hideWithUndo(selectedHideable)}><EyeOff />Hide {selectedHideable.length}</button>
+          <button className="btn btn-sm btn-primary" onClick={() => hideWithUndo(selectedHideable)}><EyeOff />Hide {fmtN(selectedHideable.length)}</button>
         </div>
       )}
 
@@ -924,7 +937,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       )}
 
       <Modal open={hideAllOpen} onClose={closeHideAll} busy={!!hideAllRun}
-        title={hideAllResult ? "Done" : `Hide ${hideAllCount} negative ${hideAllCount === 1 ? "comment" : "comments"}?`}
+        title={hideAllResult ? "Done" : `Hide ${fmtN(hideAllCount)} negative ${hideAllCount === 1 ? "comment" : "comments"}?`}
         footer={hideAllResult ? (
           <>
             {hideAllResult.hidden.length > 0 && (
@@ -936,7 +949,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <>
             <button className="btn" onClick={closeHideAll} disabled={!!hideAllRun}>Cancel</button>
             <button className="btn btn-primary" onClick={runHideAll} disabled={!!hideAllRun || hideAllCount === 0}>
-              <EyeOff />{hideAllRun ? `Hiding ${hideAllRun.done} of ${hideAllRun.total}…` : `Hide ${hideAllCount}`}
+              <EyeOff />{hideAllRun ? `Hiding ${fmtN(hideAllRun.done)} of ${fmtN(hideAllRun.total)}…` : `Hide ${fmtN(hideAllCount)}`}
             </button>
           </>
         )}>
