@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
-import { MessagesSquare, Megaphone, PanelLeft, LogOut, Menu, Activity } from "lucide-react";
+import { MessagesSquare, Megaphone, PanelLeft, LogOut, Menu, Activity, Sun, Moon } from "lucide-react";
 import { initials } from "./ui";
 import { cacheClear } from "./cache";
 import LogPanel from "./LogPanel";
@@ -9,6 +9,25 @@ export type View = "posts" | "ads";
 
 export function BrandMark() {
   return <span className="brand-mark" aria-hidden><Activity /></span>;
+}
+
+/** Light / dark switch. The choice is stored in localStorage ("cp:theme") and applied before first paint by layout.tsx. */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  useEffect(() => { setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark"); }, []);
+  const flip = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    if (next === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", next === "light" ? "#f5f4fa" : "#0d0d18");
+    try { localStorage.setItem("cp:theme", next); } catch {}
+  };
+  const label = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+  return (
+    <button className="btn btn-ghost btn-icon btn-sm theme-toggle" onClick={flip} aria-label={label} title={label}>
+      {theme === "light" ? <Moon /> : <Sun />}
+    </button>
+  );
 }
 
 export default function Shell({ view, onView, onHome, userName, children }: { view: View; onView: (v: View) => void; onHome?: () => void; userName: string; children: ReactNode }) {
@@ -74,6 +93,7 @@ export default function Shell({ view, onView, onHome, userName, children }: { vi
         <div className="crumbs">
           <button className="btn btn-ghost btn-icon btn-sm mobile-menu" onClick={() => setMobileOpen((o) => !o)} aria-label="Open menu"><Menu /></button>
           <span className="mid">Fastrr Ads</span><span className="sep mid">/</span><span>Comment Pulse</span><span className="sep">/</span><strong>{label}</strong>
+          <ThemeToggle />
         </div>
         <div className="page">{children}</div>
       </div>

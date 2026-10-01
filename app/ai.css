@@ -11,3 +11,4 @@
 .ai-run { display: grid; gap: 8px; }
 .ai-run .progress { margin: 0; }
 .ai-foot .warn { color: var(--warn); }
+.ai-foot { color: var(--muted); }
