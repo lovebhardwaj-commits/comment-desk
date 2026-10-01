@@ -21,8 +21,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ### Viewing comments
 - **Post comments** and **Ad comments** are separate sections in the sidebar.
-- **Light or dark:** the sun / moon icon at the top right switches theme. The choice is remembered in this browser and applied before the page draws (no dark flash). Dark is the default. The login screen follows the saved choice.
-- **Choosing a Page or ad account:** the picker at the top right has a **search box**. Type part of a name (or ID) to filter, use ↑ ↓ and Enter, or Esc to close. The current choice is ticked.
+- **Light or dark:** the sun / moon icon at the top right switches theme. The choice is remembered in this browser and applied before the page draws (no dark flash). Dark is the default. The login screen follows the saved choice. The light theme uses the Fastrr Ads light palette (warm cream background, white cards, coral accent and button gradient), sampled from ads-studio.shiprocket.com.
+- **Choosing a Page or ad account:** the picker at the top right has a **search box**. Type part of a name (or ID) to filter, use ↑ ↓ and Enter, or Esc to close. The current choice is ticked. The open post always belongs to the Page in the picker: changing Page closes it, and a reload keeps both the Page and the post.
 - **Start screen:** Post comments → All comments. Clicking the **Comment Pulse logo** always returns here (it will point to the homepage once there is one).
 - **Back:** an **← Back** button above the page title returns to the previous screen, and the browser's own Back/Forward buttons move between screens too, instead of leaving the app. Going back reuses the saved comments, so nothing is fetched again. Clicking through posts inside *By post / By ad* doesn't add Back steps. The screen is kept in the address (e.g. `?view=ads&mode=by-ad`), so reloading stays on it.
 - Each has two views:
@@ -31,9 +31,9 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Time window** (All comments): 24 hours, 7 days, 14 days, or a custom date range (up to 90 days back).
 - **Ads filter:** *Active* (delivering, in review or with issues) or *+ Paused* (also ads paused directly or through their campaign or ad set).
 - **Filters:** by category (the cards at the top), by platform (Instagram / Facebook), by search text, newest or oldest first, show or hide already-hidden comments, show or hide the brand's own replies.
-- **Brand replies** (toggle): shown right under the comment they answer, in every category and search, not only on *All*.
+- **Brand replies** (toggle): shown right under the comment they answer, in every category and search, not only on *All*. On Instagram, the brand's own replies are recognised from Meta's `user` field (Meta sends no username for them), labelled with the brand's username, and never counted or categorised as customer comments.
 - **Each comment shows** who wrote it, when, which post or ad it's on, its category, and tags like *Hidden*, *Brand replied*. Clicking the post opens exactly that post on the same platform in *By post / By ad*.
-- **Names:** Instagram usernames always show. Facebook names only show when Meta provides them (see *Known limits*); otherwise the comment says "Facebook user".
+- **Names:** Instagram usernames show when Meta sends them; some comments come without one and show "Instagram user" (see *Known limits*, and *What Meta sent* on that post). Facebook names only show when Meta provides them; otherwise the comment says "Facebook user".
 
 ### What the numbers mean
 - **Open** = customer comments that are still visible. Hidden comments and the brand's own replies are not counted as open. The line under it only appears when it adds something: *"of 1,040 on Instagram"* for a single post, or *"12 hidden not counted"*.
@@ -80,6 +80,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Fetching overlay**: whenever the app is talking to Meta, the comments are dimmed and a card in the middle shows progress, so nobody acts on data that's about to change.
 - **Coverage and notes** (All comments, ads): one line saying how many ads were checked and how many had comments on each platform. Anything missed sits behind one button, *"Some comments couldn't be loaded · N things to check"*; each note says what to do (e.g. which Page ID needs access or a role check).
 - **Activity log** (sidebar): every failure, gap or refused request, with the post ID, Page ID and Meta's exact response. Each entry also has **Graph API checks** you can run yourself: an *Open in Graph API Explorer* link (pick the Page, press Submit) and a *Copy curl* command. Access tokens are never put in the log; the curl uses a placeholder. *Copy all* puts everything on the clipboard to send for a fix. Kept for 24 hours in this browser.
+- **What Meta sent** (link in every post's header): opens the diagnostic page for that post, showing for each comment and reply whether Meta sent `username`, `from` and `user`. Use it when a name is missing to see whether Meta withheld it.
 - **Diagnostic page** for one post: `/api/diagnose/comments?platform=facebook|instagram&objectId=…` shows exactly what Meta returns (counts, first page, whether names are included). Linked from gap warnings.
 
 ---
@@ -87,7 +88,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 ## 3. How it works (plain words)
 
 1. **Login**: people log in with Facebook. The app only sees the Pages, Instagram accounts and ad accounts that person manages and ticked during login.
-2. **Finding comments (All comments)**: the app first asks Meta which posts or ads have comments and how many (a quick check). It then downloads comments only for posts whose count changed since last time, and streams them in post by post.
+2. **Finding comments (All comments)**: the app first asks Meta which posts or ads have comments and how many (a quick check), with no cap on how many. It then downloads comments only for posts whose count changed since last time, in batches of 20 posts, 2 batches at a time (each batch is its own request inside Vercel's 60-second limit), streaming them in post by post. A failed batch is reported with its posts; the others still load.
 3. **Saving in the browser**: fetched comments, categories, post lists and ad lists are saved in the browser (IndexedDB) for 24 hours and cleared on logout.
 4. **When the app asks Meta** (and only then): when you pick a time window or dates, when you press **Refresh**, or when nothing is saved yet for that account. Switching pages, views or browser tabs, or reloading the page, shows the saved copy and says when it was saved.
 5. **Checks against Meta's count**: if Meta says a post has comments but far fewer come back, the app doesn't trust the saved copy, fetches again, and warns if it's still short.
@@ -105,7 +106,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 | No private replies (DMs) to commenters | Needs messaging permissions that require App Review | App Review for `instagram_manage_messages` / `pages_messaging` |
 | Partnership (creator) ads' comments can't be read | The post belongs to the creator's account | Nothing on our side; creator must share access |
 | Comments on posts older than ~60 days before the window aren't in *All comments* | Keeps the check fast | Visible in *By post* |
-| Up to 80 posts/ads per check; ~1,000 Instagram comments per post in *All comments* | Vercel's 60-second limit | A note appears when the limit is hit |
+| Reading the ad list stops after ~40 s (up to 2,000 active and 1,500 paused ads); ~1,000 Instagram comments per post in *All comments* | The ad list is read in one request, inside Vercel's 60-second limit | A note says how many were checked; pick a shorter window or *Active* |
+| Some Instagram comments show "Instagram user" | Meta's answer had no username for them (cause not yet confirmed) | Open *What Meta sent* on that post to see what Meta returned |
 | New comments only appear after Refresh (or picking a time window) | By design: the app doesn't re-fetch on its own when you switch pages or tabs | Refresh button; the status line shows when data was saved |
 | Edits/deletes by others aren't noticed until a full Refresh or 24 h | The quick check only compares comment counts | Refresh button |
 | Category corrections are lost when the server restarts | Needs Upstash Redis | Add Upstash Redis in Vercel |
@@ -163,6 +165,13 @@ Every environment variable the app uses, and when it was added. **After changing
 ---
 
 ## 8. Change history
+
+### 1 Oct 2026 (evening)
+- **No more 80-post limit in *All comments*:** every post or ad with comments is read; comments are fetched in batches of 20 posts, 2 at a time, each within Vercel's 60-second limit. A failed batch is reported with its posts and the rest still load. The ad list is read on a 40-second budget (up to 2,000 active / 1,500 paused ads) instead of a fixed 400 / 300, and the note says how many were checked.
+- **Fix: the open post always belongs to the chosen Page.** Reloading could show one Page's post under another Page (the remembered screen didn't include the Page). The Page and ad account are now remembered with the screen, changing Page closes the open post, and a post from another Page is never shown.
+- **Fix: Instagram brand replies.** Meta sends no username for comments written by the brand's own account, only a `user` field the app didn't ask for, so brand replies showed as anonymous customer comments (counted, categorised, ignoring the Brand replies toggle). The app now asks for `user`, marks those as the brand's and labels them with the brand username; if Meta ever refuses the field, comments load without it. Copies saved in browsers before the fix are fetched once again (saved-data version v2).
+- **Light theme reworked from the Fastrr Ads light palette** (sampled from ads-studio.shiprocket.com): cream `#faf5f1`, white cards, warm borders, coral `#de8274` accent and the product's coral button gradient. A few product text colours read below 4.5:1, so text uses the same hue a little deeper (each noted in `app/theme.css` with the product value it replaces).
+- **Usernames investigation:** the Instagram comment request hasn't changed since usernames were last seen (30 Sept); both views use the same code, and the screen only shows "Instagram user" when Meta's answer has no username. Added the *What Meta sent* link to confirm the cause on a real post.
 
 ### 1 Oct 2026 (later)
 - **New: light theme**, switched with the sun / moon icon in the top bar; remembered per browser; dark stays the default. Built in `app/theme.css` as `:root[data-theme="light"]` overrides of the same tokens, in `── Name ──` sections (Surface / Background, Border, Text, Primary, Categories, Shadows, Component fixes), following the light-index-css-feature-section-map convention.
