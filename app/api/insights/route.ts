@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sameOrigin } from "@/lib/api";
 import { requireToken, AuthError } from "@/lib/session";
-import { analyse, config, InsightsError, type Bucket } from "@/lib/insights";
+import { analyse, mergeThemes, config, InsightsError, type Bucket } from "@/lib/insights";
 
 export const maxDuration = 60;
 
@@ -13,6 +13,7 @@ export async function GET() {
 }
 
 // POST { bucket, context, comments: [{ id, text, platform?, post?, type? }] } → themes checked against the comments sent.
+// POST { mode: "merge", bucket, context, parts: [{ key, title, explanation, suggestion?, count }] } → which batch themes belong together.
 export async function POST(req: NextRequest) {
   try {
     await requireToken();
@@ -20,6 +21,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const bucket = body.bucket as Bucket;
     if (!["Enquiry", "Positive", "Negative"].includes(bucket)) return NextResponse.json({ error: "Pick Enquiry, Positive or Negative first." }, { status: 400 });
+    // Combining the themes of several batches (big sets are analysed in batches by the screen).
+    if (body.mode === "merge") {
+      const merged = await mergeThemes(bucket, Array.isArray(body.parts) ? body.parts : [], String(body.context || "").slice(0, 300));
+      console.log(`[insights] ${bucket}: combined ${body.parts?.length ?? 0} batch themes into ${merged.groups.length}, model ${merged.model}`);
+      return NextResponse.json(merged);
+    }
     const comments = Array.isArray(body.comments) ? body.comments.slice(0, 5000) : [];
     const result = await analyse(bucket, comments, String(body.context || "").slice(0, 300));
     console.log(`[insights] ${bucket}: ${result.analysed}/${result.total} comments, ${result.themes.length} themes, model ${result.model}${result.usage?.cost != null ? `, cost $${result.usage.cost}` : ""}`);
