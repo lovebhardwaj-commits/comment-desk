@@ -112,6 +112,9 @@ const KPI: { key: Filter; label: string; color: string }[] = [
 ];
 
 const CHUNK = 100;
+/** "All comments" reads comments in batches: this many posts/ads per request, this many requests at a time. */
+const TARGETS_PER_BATCH = 20;
+const BATCHES_AT_ONCE = 2;
 /** Numbers the same way everywhere: 1,094 not 1094. */
 const fmtN = (n: number) => n.toLocaleString("en-IN");
 
@@ -267,7 +270,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       const withheldPages = new Set<string>();
       setSync((s) => ({ ...s, ...base, phase: hadCache ? "updating" : "loading", total: changed.length, loaded: 0 }));
       if (!hadCache) setComments([]);
-      await readStream("/api/inbox/comments", { targets: changed, since: Math.min(spec.sinceMs, needLonger || full ? spec.sinceMs : cachedSince.current), until: Date.now() }, (m) => {
+      const sinceArg = Math.min(spec.sinceMs, needLonger || full ? spec.sinceMs : cachedSince.current);
+      const reported = new Set<string>();
+      const onLine = (m: any) => {
+        if (m.objectId) reported.add(m.objectId);
         if (m.type === "comments") {
           const t = byId.get(m.objectId)!;
           const { count, ...src } = t;
@@ -292,7 +298,28 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         }
         else if (m.type === "skipped") { skipped++; loaded++; }
         if (m.type !== "done") setSync((s) => ({ ...s, loaded, failed, skipped }));
-      });
+      };
+      // Batches of TARGETS_PER_BATCH posts/ads, BATCHES_AT_ONCE at a time: each batch is its own request, inside
+      // Vercel's 60-second limit, so there's no cap on how many posts can be read.
+      const batches: InboxTarget[][] = [];
+      for (let i = 0; i < changed.length; i += TARGETS_PER_BATCH) batches.push(changed.slice(i, i + TARGETS_PER_BATCH));
+      let nextBatch = 0;
+      await Promise.all(Array.from({ length: Math.min(BATCHES_AT_ONCE, batches.length) }, async () => {
+        while (nextBatch < batches.length) {
+          const batch = batches[nextBatch++];
+          try {
+            await readStream("/api/inbox/comments", { targets: batch, since: sinceArg, until: Date.now() }, onLine);
+          } catch (e: any) {
+            // This batch failed as a whole: its posts count as not loaded (with the reason); the other batches carry on.
+            const missed = batch.filter((t) => !reported.has(t.objectId));
+            failed += missed.length; loaded += missed.length;
+            failReasons.add(e.message);
+            missed.forEach((t) => reported.add(t.objectId));
+            logEvent({ level: "error", area: "inbox", message: `Couldn't load comments for ${missed.length} ${spec.noun || "post"}${missed.length === 1 ? "" : "s"} (one batch): ${e.message}`, details: { objectIds: missed.slice(0, 20).map((t) => t.objectId) } });
+            setSync((s) => ({ ...s, loaded, failed, skipped }));
+          }
+        }
+      }));
       if (full || needLonger) cachedSince.current = spec.sinceMs;
       setSync((s) => ({ ...s, phase: "ready", changed: changed.length - failed - skipped - withheld.instagram - withheld.facebook, failed, skipped, withheld, withheldPages: [...withheldPages], failReasons: [...failReasons], checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length }));
       spec.onFetched?.();
@@ -702,7 +729,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     // Say so in the file when it's not the complete picture.
     const s = sync.stats;
     const gaps: string[] = [];
-    if (s?.capped) gaps.push("only the first posts/ads with comments were read");
+    if (s?.capped) gaps.push("there were more posts/ads than could be listed in one check");
     if (sync.withheld?.facebook || sync.withheld?.instagram) gaps.push("Meta withheld comments on some posts");
     if (sync.failed) gaps.push(`${sync.failed} could not be loaded`);
     if (sync.skipped) gaps.push(`${sync.skipped} were skipped for time`);
@@ -791,6 +818,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div className="hero-meta">
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target!.platform === "instagram" ? "Instagram" : "Facebook"}{target!.kind === "ad" ? " ad" : " post"}</span>
             {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
+            <a href={`/api/diagnose/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId })}`} target="_blank" rel="noreferrer"
+              title="Opens exactly what Meta returns for this post's comments: who wrote each one, and whether Meta sent their name">What Meta sent<ExternalLink /></a>
             <SyncLine sync={sync} noun="post" single />
           </div>
           {comments && sync.phase === "ready" && reported != null && (
@@ -1103,7 +1132,7 @@ function LimitNotes({ sync, noun, status }: { sync: Sync; noun: string; status?:
   if (!s || sync.phase !== "ready") return null;
   const pl = (n: number, word: string) => `${n.toLocaleString("en-IN")} ${word}${n === 1 ? "" : "s"}`;
   const notes: string[] = [];
-  if (s.capped) notes.push(`${pl(s.withComments, noun)} have comments; only the first ${sync.checked} were read. → Pick a shorter time window${noun === "ad" && status === "all" ? " or switch to Active" : ""} to read the rest.`);
+  if (s.capped) notes.push(`There were more ${noun}s than could be listed in one check, so the oldest ${noun === "ad" ? "(paused) ads" : "posts"} weren't read (${pl(s.checked, noun)} checked). → Pick a shorter time window${noun === "ad" && status === "all" ? " or switch to Active" : ""} to read the rest.`);
   const w = sync.withheld;
   if (w?.facebook) {
     const pages = (sync.withheldPages || []).map((id) => `Page ID ${id}`).join(", ");
