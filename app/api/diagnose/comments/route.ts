@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     }
 
     const media = await safe(graph<any>(objectId, userToken, { fields: "id,comments_count,owner{id,username},username,media_product_type" }));
-    const first = await safe(graph<any>(`${objectId}/comments`, userToken, { limit: 25, fields: "id,text,timestamp,username,from{id,username},replies.limit(50){id}" }));
+    const first = await safe(graph<any>(`${objectId}/comments`, userToken, { limit: 25, fields: "id,text,timestamp,username,from{id,username},user,replies.limit(50){id,text,timestamp,username,from{id,username},user}" }));
     const all = await safe(fetchComments({ platform, objectId, userToken }));
     return {
       platform, objectId,
@@ -44,7 +44,9 @@ export async function GET(req: NextRequest) {
         returned: first.v.data?.length || 0,
         withUsername: (first.v.data || []).filter((c: any) => c.username || c.from?.username).length,
         hasMore: !!first.v.paging?.next,
-        sample: (first.v.data || []).slice(0, 3).map((c: any) => ({ time: c.timestamp, username: c.username || null, from: c.from || null, text: String(c.text || "").slice(0, 60) })),
+        // What Meta says about who wrote each comment and reply: `user` is set only for the brand's own comments.
+        sample: (first.v.data || []).slice(0, 5).map((c: any) => ({ time: c.timestamp, username: c.username || null, from: c.from || null, user: c.user || null, text: String(c.text || "").slice(0, 60),
+          replies: (c.replies?.data || []).slice(0, 3).map((r: any) => ({ username: r.username || null, from: r.from || null, user: r.user || null, text: String(r.text || "").slice(0, 60) })) })),
       } : { error: first.error },
       appFetched: all.ok ? { total: all.v.length, replies: all.v.filter((c) => c.parentId).length, withName: all.v.filter((c) => c.author).length } : { error: all.error },
     };

@@ -9,6 +9,9 @@ export const TTL_MS = 24 * 3600 * 1000;
 let ns = "anon";
 let dbp: Promise<IDBDatabase | null> | null = null;
 const memory = new Map<string, { at: number; value: unknown }>();
+// Bumped when the shape or meaning of saved data changes, so old copies are ignored and fetched again once.
+// v2 (1 Oct 2026): brand replies on Instagram are now recognised; older copies marked them as customer comments.
+const VERSION = "v2";
 
 export function setCacheNamespace(userId: string) {
   ns = userId || "anon";
@@ -42,14 +45,14 @@ function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest)
 }
 
 export async function cacheGet<T>(key: string): Promise<{ at: number; value: T } | null> {
-  const k = `${ns}:${key}`;
+  const k = `${VERSION}:${ns}:${key}`;
   const hit = (await tx<{ at: number; value: T }>("readonly", (s) => s.get(k))) || (memory.get(k) as any) || null;
   if (!hit || Date.now() - hit.at > TTL_MS) return null;
   return hit;
 }
 
 export async function cacheSet(key: string, value: unknown) {
-  const k = `${ns}:${key}`;
+  const k = `${VERSION}:${ns}:${key}`;
   const entry = { at: Date.now(), value };
   memory.set(k, entry);
   await tx("readwrite", (s) => s.put(entry, k));

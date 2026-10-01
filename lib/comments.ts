@@ -23,11 +23,20 @@ export async function fetchComments(o: {
   if (o.platform === "instagram") {
     const brand = (o.brandUsername || "").toLowerCase();
     const isBrandName = (u?: string) => !!brand && (u || "").toLowerCase() === brand;
-    const replyFields = "id,text,timestamp,hidden,username,from{id,username}";
-    const rows = await graphAll<any>(`${o.objectId}/comments`, o.userToken, {
-      fields: `id,text,timestamp,hidden,username,from{id,username},replies.limit(50){${replyFields}}`,
-      limit: 50,
-    }, o.maxPages ?? 40);
+    // `user` is how Meta marks comments written by the brand's own account: for those it returns `user` (the brand's
+    // id) and leaves `username` out, so without it the brand's replies look like anonymous customer comments.
+    const fieldsFor = (withUser: boolean) => {
+      const f = `id,text,timestamp,hidden,username,from{id,username}${withUser ? ",user" : ""}`;
+      return `${f},replies.limit(50){${f}}`;
+    };
+    let rows: any[];
+    try {
+      rows = await graphAll<any>(`${o.objectId}/comments`, o.userToken, { fields: fieldsFor(true), limit: 50 }, o.maxPages ?? 40);
+    } catch (e: any) {
+      // If Meta ever refuses the `user` field, load the comments without it rather than not at all.
+      if (e?.code !== 100 || !/user/i.test(e?.message || "")) throw e;
+      rows = await graphAll<any>(`${o.objectId}/comments`, o.userToken, { fields: fieldsFor(false), limit: 50 }, o.maxPages ?? 40);
+    }
     // A comment's replies come 50 at a time: fetch the rest for comments that have more.
     const more = rows.filter((r) => r.replies?.paging?.next);
     await mapLimit(more, 4, async (r) => {
@@ -43,14 +52,17 @@ export async function fetchComments(o: {
     for (const r of rows) {
       r.username ||= r.from?.username || "";
       for (const rep of r.replies?.data || []) rep.username ||= rep.from?.username || "";
-      // The brand's own comments: by account id when known (usernames can change), else by username.
-      const isBrand = (x: any) => (!!o.brandId && x.from?.id === o.brandId) || isBrandName(x.username);
+      // The brand's own comments: Meta's `user` field (set only for comments by the brand's account), the account id
+      // when known (usernames can change), or the username.
+      const isBrand = (x: any) => !!x.user || (!!o.brandId && (x.from?.id === o.brandId || x.user?.id === o.brandId)) || isBrandName(x.username);
+      // The brand's comments come without a username, so they're labelled with the brand's own.
+      const authorOf = (x: any) => x.username || (isBrand(x) ? o.brandUsername || "" : "");
       if (recent(r.timestamp)) {
-        out.push({ id: r.id, text: r.text || "", time: r.timestamp, author: r.username || "", hidden: !!r.hidden, canHide: !isBrand(r), parentId: null, parentText: null, isBrand: isBrand(r) });
+        out.push({ id: r.id, text: r.text || "", time: r.timestamp, author: authorOf(r), hidden: !!r.hidden, canHide: !isBrand(r), parentId: null, parentText: null, isBrand: isBrand(r) });
       }
       for (const rep of r.replies?.data || []) {
         if (!recent(rep.timestamp)) continue;
-        out.push({ id: rep.id, text: rep.text || "", time: rep.timestamp, author: rep.username || "", hidden: !!rep.hidden, canHide: !isBrand(rep), parentId: r.id, parentText: r.text || "", isBrand: isBrand(rep) });
+        out.push({ id: rep.id, text: rep.text || "", time: rep.timestamp, author: authorOf(rep), hidden: !!rep.hidden, canHide: !isBrand(rep), parentId: r.id, parentText: r.text || "", isBrand: isBrand(rep) });
       }
     }
     return out;
