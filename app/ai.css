@@ -6,3 +6,8 @@
 .ai-switch button:disabled { opacity: .5; cursor: default; }
 .ai-switch .n { color: var(--faint); font-weight: 600; margin-left: 5px; }
 .ai-switch button[aria-pressed="true"] .n { color: var(--ink-2); }
+.ai-theme.other { background: transparent; border-style: dashed; }
+.ai-theme.other .ai-bar i { background: var(--faint); }
+.ai-run { display: grid; gap: 8px; }
+.ai-run .progress { margin: 0; }
+.ai-foot .warn { color: var(--warn); }

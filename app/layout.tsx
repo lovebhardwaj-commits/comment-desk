@@ -1,6 +1,7 @@
 import "./globals.css";
 import "./inbox.css";
 import "./ai.css";
+import "./select.css";
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {

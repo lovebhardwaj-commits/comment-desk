@@ -1,0 +1,22 @@
+/* Searchable Page / Ad account picker (SelectPill). Keeps the look of the original pill. */
+.pill.combo { padding: 0; }
+.combo-btn { display: inline-flex; align-items: center; gap: 8px; height: 100%; width: 100%; padding: 0 32px 0 12px; background: none; border: 0; color: inherit; font: inherit; font-weight: 600; cursor: pointer; border-radius: inherit; text-align: left; }
+.combo-btn:disabled { cursor: default; opacity: .7; }
+.combo-btn:focus-visible { outline: 2px solid var(--violet-line); outline-offset: 2px; }
+.combo-value { min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill.combo.open { border-color: var(--violet-line); }
+.combo-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: 340px; max-width: calc(100vw - 32px); padding: 8px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--line-2); box-shadow: var(--shadow); animation: toastIn .15s ease; display: grid; gap: 6px; }
+.combo-search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-2); }
+.combo-search:focus-within { border-color: var(--violet-line); }
+.combo-search input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 500; }
+.combo-search input:focus { outline: none; }
+.combo-search input::placeholder { color: var(--faint); }
+.combo-list { list-style: none; margin: 0; padding: 0; max-height: min(320px, 50vh); overflow-y: auto; display: grid; gap: 1px; }
+.combo-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 13.5px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
+.combo-list li.hi { background: var(--surface-3); color: var(--ink); }
+.combo-list li[aria-selected="true"] { color: #fff; font-weight: 600; }
+.combo-list li svg { margin-left: auto; color: var(--violet); }
+.combo-text { min-width: 0; overflow-wrap: anywhere; }
+.combo-list li.combo-empty { cursor: default; color: var(--muted); justify-content: center; }
+.combo-count { font-size: 11.5px; color: var(--faint); padding: 0 4px; }
+@media (max-width: 760px) { .combo-pop { left: auto; right: 0; width: min(320px, calc(100vw - 32px)); } }
