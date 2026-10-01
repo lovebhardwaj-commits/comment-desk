@@ -16,53 +16,56 @@
   --faint: #8989a7;
 }
 
+/* Light values are taken from the Fastrr Ads light theme (ads-studio.shiprocket.com), sampled from its screens.
+ * Backgrounds, borders, fills, the accent and the button gradient are exact. A few product text colours read below
+ * the 4.5:1 minimum, so text uses the same hue a little deeper; each one notes the product value it replaces. */
 :root[data-theme="light"] {
   /* ── Surface / Background ── */
-  --bg: #f5f4fa;
-  --bg-2: #eeecf6;
-  --surface: #ffffff;
-  --surface-2: #faf9fd;
-  --surface-3: #ebe8f5;
-  --sidebar-bg: #ffffff;
-  --backdrop: rgba(23, 21, 42, .35);
+  --bg: #faf5f1;            /* page, sidebar and top bar (warm cream) */
+  --bg-2: #f6f6f6;          /* subtle fills: ghost buttons, row numbers, segmented controls */
+  --surface: #ffffff;       /* cards, header bars, rows */
+  --surface-2: #ffffff;     /* pop-overs and menus */
+  --surface-3: #eeeeef;     /* count pills, selected segments */
+  --sidebar-bg: #faf5f1;
+  --backdrop: rgba(22, 21, 30, .35);
 
   /* ── Border ── */
-  --line: #e2dfee;
-  --line-2: #cfcae2;
+  --line: #e8e3e0;          /* warm divider on cream (sidebar edge, under the top bar) */
+  --line-2: #dededf;        /* card and button borders */
 
   /* ── Text ── */
-  --ink: #16142a;
-  --ink-2: #393651;
-  --muted: #56536f;
-  --faint: #68647f;
+  --ink: #16151e;           /* headings, names (exact) */
+  --ink-2: #3d3c48;
+  --muted: #6b6b7a;         /* body text (exact) */
+  --faint: #6f6f7d;         /* product #9494a0 / #a2a1a5 (2.4–3.0:1), deepened to 4.57:1 */
 
-  /* ── Primary ── */
-  --violet: #6d28d9;
-  --violet-2: #5b21b6;
-  --violet-soft: rgba(109, 40, 217, .08);
-  --violet-line: rgba(109, 40, 217, .38);
-  --pink: #c2255f;
-  /* --grad is the same in both themes (white text sits on it) */
+  /* ── Primary (coral) ── */
+  --violet: #bf402d;        /* coral used as TEXT (links, tags, active labels): product #de8274 is 2.6:1, deepened to 4.5:1 */
+  --violet-2: #de8274;      /* coral used as FILL: toggles, checkboxes (exact) */
+  --violet-soft: #f9eae8;   /* active tab / nav tint (exact) */
+  --violet-line: #f2cfc9;   /* coral outline (exact) */
+  --pink: #e7a991;
+  --grad: linear-gradient(90deg, #de8375 0%, #e7a991 50%, #de8475 100%); /* primary button (exact) */
 
   /* ── Categories (Enquiry / Positive / Negative / To review) ── */
-  --enquiry: #3949c4;
-  --enquiry-soft: rgba(57, 73, 196, .09);
-  --positive: #0f7a50;
-  --positive-soft: rgba(15, 122, 80, .09);
-  --negative: #c02448;
-  --negative-soft: rgba(192, 36, 72, .08);
-  --warn: #8a5a00;
-  --warn-soft: rgba(176, 114, 0, .1);
+  --enquiry: #1d5ee9;       /* product blue #4e81ee (3.4:1) deepened */
+  --enquiry-soft: #e9e9f0;  /* "Ad set level" bar (exact) */
+  --positive: #3c7c49;      /* product green #448d53 (3.7:1) deepened */
+  --positive-soft: #f0f6f2; /* "Increase budget" chip (exact) */
+  --negative: #cc312c;      /* not in the product screens: warm red that sits with the coral */
+  --negative-soft: #fbeceb;
+  --warn: #966825;          /* product amber #9c6c26, a touch deeper for its tint */
+  --warn-soft: #faf5ef;     /* "Decrease budget" chip (exact) */
 
   /* ── Shadows ── */
-  --shadow: 0 10px 30px rgba(23, 21, 42, .10);
+  --shadow: 0 8px 24px rgba(22, 21, 30, .06); /* the product is mostly flat: borders, barely any shadow */
 
   color-scheme: light;
 }
 
 /* ── Component fixes (light only) ──
- * Places where the dark theme writes white for "the brightest text". On light surfaces that must be dark ink.
- * White stays white where it sits on the violet gradient (primary button, logo, checkbox tick, toggle knob). */
+ * Where the dark theme writes white for "the brightest text": dark ink on light surfaces.
+ * White stays white on the coral gradient (primary button, logo), as in the product. */
 :root[data-theme="light"] .seg button[aria-pressed="true"],
 :root[data-theme="light"] .dr-btn.on,
 :root[data-theme="light"] .ai-switch button[aria-pressed="true"],
@@ -72,16 +75,40 @@
 :root[data-theme="light"] .ai-switch button[aria-pressed="true"] { background: var(--surface); }
 :root[data-theme="light"] .sidebar { background: var(--sidebar-bg); }
 :root[data-theme="light"] .modal-backdrop { background: var(--backdrop); }
-:root[data-theme="light"] .busy-card { box-shadow: 0 20px 50px rgba(23, 21, 42, .14); }
+:root[data-theme="light"] .busy-card { box-shadow: 0 20px 50px rgba(22, 21, 30, .10); }
 :root[data-theme="light"] .dr-row input,
 :root[data-theme="light"] .pill input[type="date"] { color-scheme: light; }
 
-/* ── Theme switch (top bar) ── */
-.crumbs .theme-toggle { margin-left: auto; }
-.theme-toggle svg { width: 17px; height: 17px; }
+/* Accent used as a FILL or graphic gets the exact product coral (scoped, so text keeps the readable shade). */
+:root[data-theme="light"] .spinner,
+:root[data-theme="light"] .ai-bar i,
+:root[data-theme="light"] .sync.live,
+:root[data-theme="light"] .sent-reply,
+:root[data-theme="light"] article.comment.flash,
+:root[data-theme="light"] .chip[aria-current="true"],
+:root[data-theme="light"] .nav-item[aria-current="page"] svg,
+:root[data-theme="light"] .ai-head > svg,
+:root[data-theme="light"] .ai-prompt > svg,
+:root[data-theme="light"] .combo-list li svg { --violet: #de8274; }
+
+/* Active sidebar item: coral tint with dark text, like the product's active nav. */
+:root[data-theme="light"] .nav-item[aria-current="page"] { background: var(--violet-soft); border-color: var(--violet-line); color: var(--ink); }
+/* Violet-tinted backgrounds from the dark theme, in coral. */
+:root[data-theme="light"] .login { background: radial-gradient(900px 500px at 50% -10%, rgba(222, 130, 116, .16), transparent 60%), var(--bg); }
+:root[data-theme="light"] .callout { background: linear-gradient(180deg, #fcf2f0, #fffaf9); }
+:root[data-theme="light"] .callout.danger { border-color: rgba(204, 49, 44, .3); background: linear-gradient(180deg, #fbeceb, #fff8f7); }
+:root[data-theme="light"] .empty-icon { background: linear-gradient(135deg, rgba(222, 130, 116, .30), rgba(231, 169, 145, .25)); }
+:root[data-theme="light"] .inbox-icon { background: var(--grad); }
+:root[data-theme="light"] .ai-card { background: linear-gradient(180deg, #fcf2f0, transparent 60%), var(--surface); }
+::selection { background: rgba(222, 130, 116, .30); }
+:root:not([data-theme="light"]) ::selection { background: rgba(181, 123, 255, .35); }
 
 /* ── Hidden comments (light) ──
  * Dark dims hidden comments with opacity; on white that drops below readable contrast, so light uses the muted ink. */
 :root[data-theme="light"] .comment.is-hidden .c-text,
 :root[data-theme="light"] .comment.is-hidden .c-author { opacity: 1; color: var(--muted); }
-:root[data-theme="light"] .nav-item[aria-current="page"] { color: var(--ink); }
+
+/* ── Theme switch (top bar) ── */
+.crumbs .theme-toggle { margin-left: auto; }
+.theme-toggle svg { width: 17px; height: 17px; }
+

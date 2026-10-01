@@ -19,7 +19,7 @@ function ThemeToggle() {
     const next = theme === "light" ? "dark" : "light";
     setTheme(next);
     if (next === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", next === "light" ? "#f5f4fa" : "#0d0d18");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", next === "light" ? "#faf5f1" : "#0d0d18");
     try { localStorage.setItem("cp:theme", next); } catch {}
   };
   const label = theme === "light" ? "Switch to dark theme" : "Switch to light theme";

@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Facebook adds "#_=_" to the address after login. Remove it so the URL stays clean. */}
         <script dangerouslySetInnerHTML={{ __html: `if(location.hash==="#_=_"||location.hash==="#"){history.replaceState(null,"",location.pathname+location.search)}` }} />
         {/* Light theme, if chosen before: applied before the page draws so there's no dark flash. */}
-        <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem("cp:theme")==="light"){document.documentElement.dataset.theme="light";var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute("content","#f5f4fa")}}catch(e){}` }} />
+        <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem("cp:theme")==="light"){document.documentElement.dataset.theme="light";var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute("content","#faf5f1")}}catch(e){}` }} />
       </head>
       <body>{children}</body>
     </html>
