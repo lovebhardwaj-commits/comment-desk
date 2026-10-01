@@ -82,7 +82,10 @@ function App({ userName }: { userName: string }) {
   // Each screen (Post or Ad comments × All comments or By post/ad) is an entry in the browser's history, so the
   // browser's Back button moves between screens instead of leaving the app. Picking another post inside a list
   // replaces the entry rather than adding one, so Back always returns to the previous *screen*.
-  type NavState = { cp: 1; depth: number; view: View; postsMode: "inbox" | "list"; adsMode: "inbox" | "list"; target: Target | null; adId: string; platform: "instagram" | "facebook" };
+  type NavState = { cp: 1; depth: number; view: View; postsMode: "inbox" | "list"; adsMode: "inbox" | "list"; target: Target | null; adId: string; platform: "instagram" | "facebook"; pageId?: string; adAccountId?: string };
+  // The Page and ad account the remembered screen belongs to, applied once the lists have loaded.
+  const wantPage = useRef("");
+  const wantAdAccount = useRef("");
   const restoring = useRef(false);
   const depth = useRef(0);
   const screenKey = (s: { view: View; postsMode: string; adsMode: string }) => `${s.view}:${s.view === "posts" ? s.postsMode : s.adsMode}`;
@@ -99,7 +102,9 @@ function App({ userName }: { userName: string }) {
     if (st?.cp) {
       depth.current = st.depth;
       setView(st.view); setPostsMode(st.postsMode); setAdsMode(st.adsMode); setPlatform(st.platform);
-      if (st.target) { pendingTarget.current = st.target; setTarget(st.target); }
+      wantPage.current = st.pageId || ""; wantAdAccount.current = st.adAccountId || "";
+      // The open post is only restored if it belongs to the remembered Page (checked again when posts load).
+      if (st.target && (st.view !== "posts" || !st.pageId || st.target.pageId === st.pageId)) { pendingTarget.current = st.target; setTarget(st.target); }
       setAdId(st.adId || "");
       restoring.current = true;
     } else if (q.get("view")) {
@@ -114,6 +119,8 @@ function App({ userName }: { userName: string }) {
       restoring.current = true;
       depth.current = s.depth;
       setView(s.view); setPostsMode(s.postsMode); setAdsMode(s.adsMode); setPlatform(s.platform);
+      if (s.pageId) setPageId(s.pageId);
+      if (s.adAccountId) setAdAccountId(s.adAccountId);
       pendingTarget.current = s.target;
       setTarget(s.target); setAdId(s.adId || "");
     };
@@ -125,7 +132,7 @@ function App({ userName }: { userName: string }) {
   useEffect(() => {
     const now = { view, postsMode, adsMode };
     const key = screenKey(now);
-    const st: NavState = { cp: 1, depth: depth.current, view, postsMode, adsMode, target, adId, platform };
+    const st: NavState = { cp: 1, depth: depth.current, view, postsMode, adsMode, target, adId, platform, pageId, adAccountId };
     if (restoring.current || !lastScreen.current) {
       restoring.current = false;
       window.history.replaceState(st, "", urlFor(now));
@@ -137,7 +144,7 @@ function App({ userName }: { userName: string }) {
     }
     lastScreen.current = key;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, postsMode, adsMode, target?.key, adId, platform]);
+  }, [view, postsMode, adsMode, target?.key, adId, platform, pageId, adAccountId]);
 
   const atStart = view === "posts" && postsMode === "inbox";
   /** In-app Back: the previous screen in this tab, or the screen "above" this one if there's no history yet. */
@@ -160,7 +167,7 @@ function App({ userName }: { userName: string }) {
       .then((d) => {
         setPages(d.pages);
         setMissingPermissions(d.missingPermissions || []);
-        const first = d.pages.find((p) => p.instagram) || d.pages[0];
+        const first = d.pages.find((p) => p.id === wantPage.current) || d.pages.find((p) => p.instagram) || d.pages[0];
         if (first) {
           setPageId(first.id);
           setPlatform(first.instagram ? "instagram" : "facebook");
@@ -174,7 +181,7 @@ function App({ userName }: { userName: string }) {
       api<{ adAccounts: AdAcc[] }>("/api/adaccounts")
         .then((d) => {
           setAdAccounts(d.adAccounts);
-          const first = d.adAccounts.find((a) => a.active) || d.adAccounts[0];
+          const first = d.adAccounts.find((a) => a.id === wantAdAccount.current) || d.adAccounts.find((a) => a.active) || d.adAccounts[0];
           if (first) setAdAccountId(first.id);
         })
         .catch((e) => setAdsError(e.message));
@@ -205,9 +212,10 @@ function App({ userName }: { userName: string }) {
     const pickTarget = (list: Post[]) => {
       if (view !== "posts") return;
       if (pendingTarget.current) {
-        setTarget(pendingTarget.current);
+        const t = pendingTarget.current;
         pendingTarget.current = null;
-        return;
+        // A post from another Page (e.g. remembered before switching Page) is never shown under this Page.
+        if (!t.pageId || t.pageId === page.id) { setTarget(t); return; }
       }
       setTarget((cur) => {
         // Keep the open post if it's still in the list, with its latest comment count.
@@ -406,6 +414,8 @@ function App({ userName }: { userName: string }) {
             <div className="controls">
               <SelectPill icon={<Store />} label="Page" title={page?.name} value={pageId} disabled={!pages?.length}
                 onChange={(v) => {
+                  // A different Page: its posts replace the list, so the open post (from the old Page) is closed.
+                  if (v !== pageId) { setTarget(null); pendingTarget.current = null; }
                   setPageId(v);
                   const p = pages?.find((x) => x.id === v);
                   setPlatform(p?.instagram ? platform : "facebook");
