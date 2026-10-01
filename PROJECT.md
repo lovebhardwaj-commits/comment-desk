@@ -5,7 +5,7 @@ This file describes everything Comment Pulse does today, how it works, what's kn
 - **Live app:** https://comment-desk.vercel.app
 - **Code:** https://github.com/lovebhardwaj-commits/comment-desk
 - **Setup steps** (Meta app, Vercel, environment variables): see `README.md`
-- **Last updated:** 30 Sept 2026
+- **Last updated:** 1 Oct 2026
 
 ---
 
@@ -21,6 +21,8 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ### Viewing comments
 - **Post comments** and **Ad comments** are separate sections in the sidebar.
+- **Light or dark:** the sun / moon icon at the top right switches theme. The choice is remembered in this browser and applied before the page draws (no dark flash). Dark is the default. The login screen follows the saved choice.
+- **Choosing a Page or ad account:** the picker at the top right has a **search box**. Type part of a name (or ID) to filter, use ↑ ↓ and Enter, or Esc to close. The current choice is ticked.
 - **Start screen:** Post comments → All comments. Clicking the **Comment Pulse logo** always returns here (it will point to the homepage once there is one).
 - **Back:** an **← Back** button above the page title returns to the previous screen, and the browser's own Back/Forward buttons move between screens too, instead of leaving the app. Going back reuses the saved comments, so nothing is fetched again. Clicking through posts inside *By post / By ad* doesn't add Back steps. The screen is kept in the address (e.g. `?view=ads&mode=by-ad`), so reloading stays on it.
 - Each has two views:
@@ -29,6 +31,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 - **Time window** (All comments): 24 hours, 7 days, 14 days, or a custom date range (up to 90 days back).
 - **Ads filter:** *Active* (delivering, in review or with issues) or *+ Paused* (also ads paused directly or through their campaign or ad set).
 - **Filters:** by category (the cards at the top), by platform (Instagram / Facebook), by search text, newest or oldest first, show or hide already-hidden comments, show or hide the brand's own replies.
+- **Brand replies** (toggle): shown right under the comment they answer, in every category and search, not only on *All*.
 - **Each comment shows** who wrote it, when, which post or ad it's on, its category, and tags like *Hidden*, *Brand replied*. Clicking the post opens exactly that post on the same platform in *By post / By ad*.
 - **Names:** Instagram usernames always show. Facebook names only show when Meta provides them (see *Known limits*); otherwise the comment says "Facebook user".
 
@@ -60,11 +63,16 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 
 ### Why are people saying this? (AI analysis)
 - On the **Enquiry, Positive or Negative** view, a panel groups the comments on screen into **3–6 themes**: *"What are people asking?"*, *"Why are people happy?"*, *"What's going wrong?"*. From the **All** view, a small bar offers the three categories.
+- **Switching category:** the top of the panel has *All comments · Enquiries · Positive · Negative* (with counts). Each category keeps its own saved analysis, so switching back and forth doesn't run the AI again. The category cards at the top do the same.
+- **Hide themes / Show N themes** collapses the analysis so the comments come back into view.
 - Each theme shows **how many comments** it covers (and the share), a one-line explanation, **up to 3 real example comments** (click one to jump to it in the list), and for enquiries and negatives a **practical suggestion** (e.g. *"Mention delivery days and COD in the ad"*).
 - **Nothing is invented:** the app sends each comment with a short reference and checks the answer. Themes or examples that don't point at real comments are dropped, and each comment is counted once. Example text is shown from the app's own copy of the comment, not from the AI's reply.
-- **Only runs when you click** *Analyse*. Uses the comments on screen (same time window and filters as the CSV), up to 400 per run; bigger sets are sampled evenly across the period, and the panel says so.
+- **Only runs when you click** *Analyse*. Uses the **open** comments on screen in that category (the same ones the card counts; hidden comments are left out), with the same time window, platform and search as the list.
+- **Every comment is counted:** each one lands in exactly one theme. Very short or general comments (emojis, "nice", a single word) go into a final **Other comments** theme, shown in a quieter style. The themes always add up to the number analysed.
+- **Big sets are analysed in batches:** up to 250 comments per batch, 3 batches at a time, then one step that combines the batch themes. The AI only decides which batch themes are the same; the app adds up the comments, so counts stay exact. The panel shows progress (*"5 batches · 2 of 5 done"*) and a time estimate. Up to 3,000 comments per run; above that an even sample is analysed and the panel says so.
+- **If a batch fails** it's retried once; if it still fails, the result shows without it and says how many comments are missing (*"868 of 1,085 enquiries"*). If the combining step fails, themes with the same name are grouped instead. If everything fails, the panel shows the reason (e.g. the key is out of credit).
 - **Saved with the view**, so reopening it costs nothing; if new comments arrive, the panel says how many and offers **Re-run**. **Copy** puts the analysis on the clipboard as text.
-- Every run (model, number of comments, tokens and cost if OpenRouter reports it) and every failure goes to the **Activity log**. If it isn't set up in Vercel, the panel says which settings are missing.
+- Every run (model, number of comments, tokens and cost if OpenRouter reports it) and every failure goes to the **Activity log**; the panel itself stays in plain language. If it isn't set up in Vercel, the panel says which settings are missing.
 
 ### Staying informed
 - **Status line** on every view: how fresh the data is, e.g. *Saved at 12:23 pm · press Refresh to check for new comments*, or how many posts were just updated.
@@ -85,7 +93,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 5. **Checks against Meta's count**: if Meta says a post has comments but far fewer come back, the app doesn't trust the saved copy, fetches again, and warns if it's still short.
 6. **Categorising**: a built-in model (free, runs on the server) sorts each comment. It understands English, Hindi and Hinglish. Corrections from the team are fed back in. It can be switched to Claude (paid) with a setting.
 7. **Ads**: active ads are always read first, then paused ones. Each ad's post is read in batches of 50 per Meta call.
-8. **AI analysis**: when you click *Analyse*, the server sends the comments on screen (up to 400, each cut to 300 characters) to the model set in `OPENROUTER_MODEL`, through OpenRouter. The model is told the comments are data, not instructions (so a comment can't hijack it). Its answer is checked against the comments sent before anything is shown. The key never reaches the browser.
+8. **AI analysis**: when you click *Analyse*, the screen sends the open comments in view in batches of up to 250 (each comment cut to 300 characters) to the server, which passes them to the model set in `OPENROUTER_MODEL` through OpenRouter. Batch themes are then combined in one more request. The model is told the comments are data, not instructions (so a comment can't hijack it). Its answer is checked against the comments sent before anything is shown. The key never reaches the browser.
 
 ---
 
@@ -103,7 +111,7 @@ Nothing happens automatically. Comments are only hidden or replied to when someo
 | Category corrections are lost when the server restarts | Needs Upstash Redis | Add Upstash Redis in Vercel |
 | Only people with a role on the Meta app can log in; no webhooks | Meta app is in Development mode | Business Verification + App Review |
 | Everything runs on each person's own Facebook login | No System User yet | System User token (planned) |
-| AI analysis reads at most 400 comments per run (an even sample of bigger sets), and its themes are the model's reading | Keeps each run fast and cheap, within Vercel's 60-second limit | Filter to a narrower set (e.g. one platform) for a closer look; counts and examples are always checked |
+| AI analysis reads up to 3,000 comments per run (an even sample of bigger sets), and its themes are the model's reading | Keeps each run within a few minutes and a few cents | Filter to a narrower set (e.g. one platform) for a closer look; counts and examples are always checked |
 
 ---
 
@@ -155,6 +163,24 @@ Every environment variable the app uses, and when it was added. **After changing
 ---
 
 ## 8. Change history
+
+### 1 Oct 2026 (later)
+- **New: light theme**, switched with the sun / moon icon in the top bar; remembered per browser; dark stays the default. Built in `app/theme.css` as `:root[data-theme="light"]` overrides of the same tokens, in `── Name ──` sections (Surface / Background, Border, Text, Primary, Categories, Shadows, Component fixes), following the light-index-css-feature-section-map convention.
+- **Every screen checked for readable contrast in both themes** (WCAG 4.5:1 for normal text), including text on gradients. Fixed: the selected sidebar item and the brightest text (selected buttons, picker choice) used white, which disappears on light; hidden comments in light now use the muted ink instead of half opacity.
+- **Dark theme: small grey text made readable.** `--faint` was #5d5d78 (2.41:1 on the lightest dark panel, below the minimum); it's now #8989a7 and `--muted` #9a9ab6, both at least 4.5:1 on every dark background. Separators, counts and small labels look slightly brighter.
+- AI panel footer uses the muted grey (the faint one was just under the minimum on the panel's tint).
+
+### 1 Oct 2026
+- **AI analysis: counts now add up.** Before, the AI could leave comments out of every theme (49 of 66 positives in one run), and hidden comments were analysed though the cards don't count them. Now every comment lands in exactly one theme (*Other comments* for the general ones), and only open comments are analysed, so the panel matches the card.
+- **AI analysis: batches instead of a 400 cap.** Up to 3,000 comments per run, 250 per batch, 3 at a time, then combined; progress and time estimate shown; failed batches retried, and reported if still missing; the real reason shown when nothing works.
+- **Fix: brand replies** now show under their comment in every category, not only on *All*.
+- **New: search** in the Page and ad account pickers (also keyboard: ↑ ↓ Enter Esc).
+- **Numbers formatted the same everywhere** (1,094, not 1094): category cards, platform counts, Download CSV, *Hide all negative*, *Hidden*, the callouts and the hide dialog.
+- **Category cards** say what clicking them does; **Download CSV** says when hidden comments are included (which is why it can be higher than the card).
+
+### 30 Sept 2026 (later)
+- **AI analysis panel:** a category switcher (All comments · Enquiries · Positive · Negative) to move between analyses or back to all comments; each keeps its saved result.
+- **Clearer wording:** the panel no longer mentions the AI model, Vercel or the cost per run (these stay in the Activity log); *Hide themes / Show N themes*; the category cards say what clicking them does.
 
 ### 30 Sept 2026
 - **New: Why are people saying this? (AI analysis).** On the Enquiry, Positive or Negative view, groups the comments on screen into themes with counts, real example comments (click to jump to them) and suggestions. Runs through OpenRouter with the model set in Vercel; every answer is checked against the real comments; results are saved per view; runs and failures are logged.
