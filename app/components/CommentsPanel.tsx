@@ -23,6 +23,15 @@ export type Src = {
 type Comment = {
   id: string; text: string; time: string; author: string; hidden: boolean; canHide: boolean;
   parentId: string | null; parentText: string | null; isBrand: boolean; src?: Src;
+  /** The same comment came back through this many ads/posts (ads that share engagement); shown once. */
+  alsoOn?: number;
+};
+
+// Replies posted from this app, remembered so they always count as the brand's, even when Meta leaves out who wrote them.
+const SENT_KEY = "cp:sent-replies";
+const loadSent = (): Set<string> => { try { return new Set(JSON.parse(localStorage.getItem(SENT_KEY) || "[]")); } catch { return new Set(); } };
+const rememberSent = (id: string) => {
+  try { const ids = [...loadSent(), id].slice(-3000); localStorage.setItem(SENT_KEY, JSON.stringify(ids)); } catch { /* storage full or blocked */ }
 };
 type InboxTarget = Src & { count: number };
 export type InboxSpec = {
@@ -217,7 +226,30 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }, 600);
   }
 
-  const flat = () => Object.values(byObj.current).flat().sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+  const flat = () => normalize(Object.values(byObj.current).flat()).sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+
+  /** One card per comment: drops repeated ids, merges the same comment returned through several ads (same author,
+   *  text and time), and marks replies sent from this app as the brand's. Merges are counted for the Activity log. */
+  // Ids merged away in this check (a Set: the list is re-tidied as each post arrives, so each id must count once).
+  const merges = useRef<Set<string>>(new Set());
+  function normalize(list: Comment[]): Comment[] {
+    const sentIds = loadSent();
+    const byId = new Map<string, Comment>();
+    for (const c of list) if (!byId.has(c.id)) byId.set(c.id, c); else noteMerge(c.id);
+    const bySig = new Map<string, Comment>();
+    const out: Comment[] = [];
+    for (const raw of byId.values()) {
+      const c = sentIds.has(raw.id) && !raw.isBrand ? { ...raw, isBrand: true, canHide: false } : { ...raw, alsoOn: undefined };
+      const plat = c.src?.platform || target?.platform || "";
+      const sig = c.text.trim() ? `${plat}|${c.author}|${c.time}|${c.parentText || ""}|${c.text.trim()}` : "";
+      const kept = sig ? bySig.get(sig) : undefined;
+      if (kept) { kept.alsoOn = (kept.alsoOn || 1) + 1; noteMerge(c.id); continue; }
+      if (sig) bySig.set(sig, c);
+      out.push(c);
+    }
+    return out;
+  }
+  function noteMerge(id: string) { merges.current.add(id); }
 
   async function runInbox(full: boolean, first: boolean) {
     const spec = inbox!;
@@ -322,6 +354,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       }));
       if (full || needLonger) cachedSince.current = spec.sinceMs;
       setSync((s) => ({ ...s, phase: "ready", changed: changed.length - failed - skipped - withheld.instagram - withheld.facebook, failed, skipped, withheld, withheldPages: [...withheldPages], failReasons: [...failReasons], checkedAt: Date.now(), withNew: Object.values(byObj.current).filter((l) => l.length).length }));
+      setComments(flat());
+      if (merges.current.size) {
+        const n = merges.current.size;
+        logEvent({ level: "warn", area: "duplicates", message: `${n} repeated comment${n === 1 ? "" : "s"} merged (Meta returned the same comment more than once, or through several ads); each is shown once`, details: { sampleCommentIds: [...merges.current].slice(0, 10) } });
+        merges.current = new Set();
+      }
       spec.onFetched?.();
       persistSoon();
     } catch (e: any) {
@@ -341,7 +379,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       if (c) {
         hadCache = true;
         resultsRef.current = c.value.results; setResults(c.value.results);
-        setComments(c.value.comments);
+        setComments(normalize(c.value.comments));
         // Reuse the saved copy only if Meta's count hasn't moved AND the copy isn't suspiciously short.
         const same = t.count != null && c.value.count === t.count && !looksIncomplete(c.value.comments.length, t.count);
         setSync({ phase: same ? "ready" : "checking", cachedAt: c.at, checkedAt: same ? c.at : undefined, changed: 0, fromCache: same });
@@ -351,8 +389,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     setSync((s) => ({ ...s, phase: hadCache || commentsRef.current ? "checking" : "loading" }));
     try {
       const d = await api<{ comments: Comment[] }>(`/api/comments?${new URLSearchParams({ platform: t.platform, objectId: t.objectId, pageId: t.pageId, brandUsername: t.brandUsername })}`);
-      setComments(d.comments);
-      commentsRef.current = d.comments;
+      const clean = normalize(d.comments);
+      setComments(clean);
+      commentsRef.current = clean;
       const gap = looksIncomplete(d.comments.length, t.count) ? { reported: t.count!, got: d.comments.length } : undefined;
       incomplete.current = !!gap;
       if (gap) logEvent({ level: "error", area: `${t.platform} comments`, message: `Meta reports ${gap.reported} comments on this ${t.kind || "post"} but returned ${gap.got}`, details: { objectId: t.objectId, pageId: t.pageId || undefined, title: t.title, diagnose: `/api/diagnose/comments?platform=${t.platform}&objectId=${t.objectId}`, checks: commentChecks(t.platform, t.objectId) } });
@@ -512,6 +551,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         method: "POST",
         body: JSON.stringify({ platform: w.platform, pageId: w.pageId, commentId: top, message }),
       });
+      if (d.id) rememberSent(d.id);
       const parent = (comments || []).find((x) => x.id === top);
       const reply: Comment = {
         id: d.id || `local-${Date.now()}`, text: message, time: d.time || new Date().toISOString(),
@@ -1052,6 +1092,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                     : <span className="tag tag-hidden"><EyeOff />Hidden</span>)}
                   {moving[c.id] && <span className="moved-note"><ArrowRight />Moved to {moving[c.id]}</span>}
                   {!c.isBrand && replied.has(c.id) && <span className="tag tag-fixed"><CornerDownRight />Brand replied</span>}
+                  {(c.alsoOn || 0) > 1 && <span className="tag" title="Meta returned this same comment through several ads (ads that share a post's engagement). It's shown and counted once.">On {c.alsoOn} ads</span>}
                 </div>
                 {c.src && (
                   <button className="c-src" onClick={() => inbox?.onOpen?.(c.src!)} title="Open this post with all its comments">

@@ -65,7 +65,7 @@ export async function fetchComments(o: {
         out.push({ id: rep.id, text: rep.text || "", time: rep.timestamp, author: authorOf(rep), hidden: !!rep.hidden, canHide: !isBrand(rep), parentId: r.id, parentText: r.text || "", isBrand: isBrand(rep) });
       }
     }
-    return out;
+    return uniqueById(out);
   }
 
   const pageId = o.pageId || o.objectId.split("_")[0];
@@ -81,8 +81,12 @@ export async function fetchComments(o: {
     page = await graph(page.paging.next, token);
   }
   const textById = new Map(rows.map((r) => [r.id, r.message || ""]));
+  // Before App Review Meta often leaves `from` out, even for the Page's own comments. A Page can't hide its own
+  // comments, so an author-less comment Meta says can't be hidden is the Page's, but only trust that when other
+  // comments on this post CAN be hidden (otherwise the login may simply lack the permission to hide anything).
+  const canModerate = rows.some((r) => r.can_hide === true);
   for (const r of rows) {
-    const isBrand = r.from?.id === pageId;
+    const isBrand = r.from?.id === pageId || (!r.from && canModerate && r.can_hide === false);
     out.push({
       // Meta may leave `from` out for Facebook commenters (e.g. before App Review). The screen then shows
       // "Facebook user" with an explanation, instead of a made-up name.
@@ -91,7 +95,13 @@ export async function fetchComments(o: {
       parentText: r.parent?.id ? textById.get(r.parent.id) ?? r.parent?.message ?? null : null, isBrand,
     });
   }
-  return out;
+  return uniqueById(out);
+}
+
+/** Meta's pages can overlap (e.g. when new comments arrive while paging), so the same comment can come back twice. */
+function uniqueById(list: C[]): C[] {
+  const seen = new Set<string>();
+  return list.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
 }
 
 /** Runs async work with at most `limit` tasks at a time. */
