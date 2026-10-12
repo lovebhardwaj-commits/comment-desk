@@ -622,7 +622,22 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         resultsRef.current = { ...resultsRef.current, ...freshResults };
         setResults((r) => ({ ...r, ...freshResults }));
         persistSoon();
-        toast({ kind: "ok", msg: `Translated ${fmtN(n)} comment${n === 1 ? "" : "s"} and updated ${n === 1 ? "its" : "their"} category.` });
+        // Comments whose new category isn't the one in view would vanish with their translation: keep them on screen
+        // for a few seconds with a "Moved to …" note, so the person sees the translation and where it went.
+        const moved = filter === "All" ? [] : Object.entries(freshResults).filter(([, r]) => r.category !== filter);
+        if (moved.length) {
+          setMoving((m) => ({ ...m, ...Object.fromEntries(moved.map(([id, r]) => [id, r.category])) }));
+          for (const [id] of moved) {
+            clearTimeout(movingTimers.current[id]);
+            movingTimers.current[id] = setTimeout(() => setMoving((m) => { const x = { ...m }; delete x[id]; return x; }), 8000);
+          }
+        }
+        const top = moved.length ? Object.entries(moved.reduce((a, [, r]) => ({ ...a, [r.category]: (a[r.category] || 0) + 1 }), {} as Record<string, number>)).sort((a, b) => b[1] - a[1])[0][0] : "";
+        toast({
+          kind: "ok",
+          msg: `Translated ${fmtN(n)} comment${n === 1 ? "" : "s"}.${moved.length ? ` ${fmtN(moved.length)} moved to another category.` : ""}`,
+          action: top ? { label: `View ${top}`, run: () => setFilter(top as Filter) } : undefined,
+        });
       }
       setTranslating(false);
     }
@@ -1135,7 +1150,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                 )}
                 {c.parentId && c.parentText && <div className="c-parent">Replying to: {c.parentText}</div>}
                 <p className="c-text">{c.text || <em style={{ color: "var(--muted)" }}>Sticker or image</em>}</p>
-                {translations[c.id] && <p className="c-translation" title={`Translated from ${translations[c.id].language}`}><Languages />{translations[c.id].english}</p>}
+                {translations[c.id] && <p className="c-translation"><Languages /><span><span className="tr-label">Translated from {translations[c.id].language || "another language"}:</span>{translations[c.id].english}</span></p>}
                 {!c.isBrand && (
                   <div className="c-foot">
                     {r && r.category !== "Unclassified" ? (
