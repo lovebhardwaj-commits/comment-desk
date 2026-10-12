@@ -832,15 +832,15 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const selectedHideable = [...selected].filter((id) => hideable.some((c) => c.id === id));
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
+  // Per-comment checkboxes only show once a selection has started (Select all / Select spam); one comment = its Hide button.
+  const selecting = selected.size > 0;
 
   // Fetching overlay: whenever the app is talking to Meta (checking or loading), the list is dimmed and can't be acted
   // on, and a card in the middle says what's happening. Views checked in the last 2 minutes aren't re-checked at all.
   const busyNow = sync.phase === "updating" || sync.phase === "loading" || sync.phase === "checking";
   const nounOf = inbox?.noun || "post";
-  const busyTitle = sync.phase === "checking" ? "Checking Meta for new comments…" : "Fetching comments from Meta…";
-  const busyDetail = sync.phase === "checking"
-    ? (sync.cachedAt ? `Saved copy from ${ago(sync.cachedAt)} shown underneath` : "This takes a few seconds")
-    : sync.total ? `${sync.loaded || 0} of ${sync.total} ${nounOf}${sync.total === 1 ? "" : "s"} done` : "Almost there";
+  const busyTitle = "Getting the latest comments…";
+  const busyDetail = sync.total ? `${sync.loaded || 0} of ${sync.total} ${nounOf}${sync.total === 1 ? "" : "s"}` : "";
 
   const PlatformIcon = target?.platform === "instagram" ? Instagram : Facebook;
   const windowLabel = inbox ? inbox.label : "";
@@ -848,13 +848,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   return (
     <div>
       {inbox ? (
-        <div className="card post-hero inbox-hero">
-          <span className="thumb inbox-icon"><Inbox /></span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <h2>All comments · {windowLabel}</h2>
-            <div className="caption">{inbox.scope}</div>
-            <div className="hero-meta"><Refreshed sync={sync} /></div>
-          </div>
+        <div className="card inbox-line">
+          <span className="inbox-scope">{inbox.scope} · {windowLabel}</span>
+          <Refreshed sync={sync} />
         </div>
       ) : target ? (
       <div className="card post-hero">
@@ -881,7 +877,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div className="busy-card">
             <span className="spinner" aria-hidden />
             <strong>{busyTitle}</strong>
-            <span>{busyDetail}</span>
+            {busyDetail && <span>{busyDetail}</span>}
             {!!sync.total && <div className="progress"><i style={{ width: `${(100 * (sync.loaded || 0)) / sync.total}%` }} /></div>}
           </div>
         </div>
@@ -1060,14 +1056,16 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       </Modal>
 
       <div className="comments">
-        {visible.map((c) => {
+        {visible.map((c, i) => {
           const r = results[c.id];
           const isSel = selected.has(c.id);
+          // Shown directly under the comment it answers (same thread): the post and the quote would only repeat it.
+          const inThread = !!c.parentId && visible.slice(0, i).some((p) => p.id === c.parentId);
           return (
-            <article key={c.id} data-cid={c.id} className={`comment${c.parentId ? " is-reply" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}${moving[c.id] ? " moving" : ""}`}>
+            <article key={c.id} data-cid={c.id} className={`comment${c.parentId ? " is-reply" : ""}${inThread ? " in-thread" : ""}${c.hidden ? " is-hidden" : ""}${c.isBrand ? " brand" : ""}${isSel ? " selected" : ""}${moving[c.id] ? " moving" : ""}`}>
               <div className="c-side">
                 <span className="avatar">{c.isBrand ? <BadgeCheck size={15} /> : initials(c.author)}</span>
-                {c.canHide && !c.hidden && (
+                {selecting && c.canHide && !c.hidden && (
                   <input type="checkbox" className="check" checked={isSel} onChange={() => toggleSel(c.id)} aria-label={`Select comment by ${c.author}`} />
                 )}
               </div>
@@ -1087,9 +1085,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                     : <span className="tag tag-hidden"><EyeOff />Hidden</span>)}
                   {moving[c.id] && <span className="moved-note"><ArrowRight />Moved to {moving[c.id]}</span>}
                   {!c.isBrand && replied.has(c.id) && <span className="tag tag-fixed"><CornerDownRight />Brand replied</span>}
+                  {inThread && <span className="reply-mark"><CornerDownRight />Reply</span>}
                   {(c.alsoOn || 0) > 1 && <span className="tag" title="Meta returned this same comment through several ads (ads that share a post's engagement). It's shown and counted once.">On {c.alsoOn} ads</span>}
                 </div>
-                {c.src && (
+                {c.src && !inThread && (
                   <button className="c-src" onClick={() => inbox?.onOpen?.(c.src!)} title="Open this post with all its comments">
                     {c.src.image ? <img src={c.src.image} alt="" loading="lazy" /> : <span className="c-src-ph">{c.src.kind === "ad" ? <Megaphone /> : <ImageIcon />}</span>}
                     {c.src.platform === "instagram" ? <Instagram /> : <Facebook />}
@@ -1097,7 +1096,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                     <ChevronRight />
                   </button>
                 )}
-                {c.parentId && c.parentText && <div className="c-parent">Replying to: {c.parentText}</div>}
+                {c.parentId && c.parentText && !inThread && <div className="c-parent">Replying to: {c.parentText}</div>}
                 <p className="c-text">{c.text || <em style={{ color: "var(--muted)" }}>Sticker or image</em>}</p>
                 {translations[c.id] && <p className="c-translation"><Languages /><span><span className="tr-label">Translated from {translations[c.id].language || "another language"}:</span>{translations[c.id].english}</span></p>}
                 {!c.isBrand && (
