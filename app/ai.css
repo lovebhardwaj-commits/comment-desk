@@ -60,3 +60,11 @@
 .cat-chip.cat-Enquiry { background: var(--enquiry-soft); color: var(--enquiry); }
 .cat-chip.cat-Positive { background: var(--positive-soft); color: var(--positive); }
 .cat-chip.cat-Negative { background: var(--negative-soft); color: var(--negative); }
+
+/* ── All comments header: one line ── */
+.inbox-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; margin-bottom: 14px; }
+.inbox-scope { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+/* ── A reply shown under its comment: sits close to it, with a small mark instead of a repeated quote ── */
+.comment.in-thread { margin-top: -6px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+.reply-mark { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.reply-mark svg { width: 13px; height: 13px; }
