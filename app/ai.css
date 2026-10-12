@@ -47,3 +47,8 @@
 /* ── Category cards: four (Open, Enquiry, Positive, Negative) ── */
 .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ── Platform switch (All · Instagram · Facebook): tighter, so icon and count read as one ── */
+.toolbar .seg[aria-label="Platform"] button { padding: 0 10px; gap: 5px; }
+/* ── Translation label ── */
+.c-translation .tr-label { font-weight: 600; color: var(--muted); margin-right: 4px; white-space: nowrap; }
