@@ -893,10 +893,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
               <div className="kpi-label" title={k.key === "All" ? "Customer comments that are still visible on Instagram or Facebook. Hidden comments and the brand's own replies aren't counted." : undefined}><i />{k.label}</div>
               <div className="kpi-value">{comments ? n.toLocaleString("en-IN") : "–"}</div>
               <div className="kpi-sub">
-                {k.key === "All"
-                  ? (progress ? "Categorising…" : tally.hidden ? `${tally.hidden.toLocaleString("en-IN")} hidden not counted` : "still visible")
-                  : comments ? `${share}%` : " "}
-                {k.key !== "All" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
+                {k.key === "All" ? (progress ? "Categorising…" : "still visible") : comments ? `${share}%` : " "}
               </div>
               {k.key !== "All" && <span className="kpi-bar" style={{ width: `${share}%` }} />}
             </button>
@@ -969,7 +966,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         </div>
       )}
 
-      {hideable.length > 0 && (
+      {/* Bulk selection is for clearing negatives and spam; everywhere else one comment = its Hide button. */}
+      {filter === "Negative" && hideable.length > 0 && (
         <label className="select-all">
           <input type="checkbox" className="check" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(hideable.map((c) => c.id)))} />
           Select all {fmtN(hideable.length)}
