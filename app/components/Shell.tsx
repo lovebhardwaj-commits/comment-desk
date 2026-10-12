@@ -30,9 +30,25 @@ function ThemeToggle() {
   );
 }
 
+/** The Activity log is for the internal team only: open the app once with ?debug=1 to show it (remembered in this
+ *  browser), ?debug=0 to hide it again. Merchants never see it. */
+function useDebug() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get("debug");
+      if (q === "1") localStorage.setItem("cp:debug", "1");
+      if (q === "0") localStorage.removeItem("cp:debug");
+      setOn(localStorage.getItem("cp:debug") === "1");
+    } catch {}
+  }, []);
+  return on;
+}
+
 export default function Shell({ view, onView, onHome, userName, children }: { view: View; onView: (v: View) => void; onHome?: () => void; userName: string; children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const debug = useDebug();
 
   useEffect(() => {
     try { setCollapsed(localStorage.getItem("cp:sidebar") === "1"); } catch {}
@@ -80,7 +96,7 @@ export default function Shell({ view, onView, onHome, userName, children }: { vi
         </nav>
 
         <div className="sidebar-bottom">
-          <nav className="nav"><LogPanel collapsed={collapsed} /></nav>
+          {debug && <nav className="nav"><LogPanel collapsed={collapsed} /></nav>}
           <div className="user" title={userName}>
             <span className="avatar">{initials(userName)}</span>
             <span className="user-name">{userName}</span>

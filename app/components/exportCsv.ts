@@ -3,11 +3,11 @@
 
 export type ExportRow = {
   commenter: string; platform: "instagram" | "facebook"; time: string; text: string;
-  bucket: string; type: string; needsReview: boolean; post: string; link: string;
+  bucket: string; type: string; score: number | null; post: string; link: string;
   hidden: boolean; brandReplied: boolean; isReply: boolean; replyingTo: string;
 };
 
-const HEAD = ["commenter", "platform", "comments_by_this_person", "date", "comment", "bucket", "type", "needs_review",
+const HEAD = ["commenter", "platform", "comments_by_this_person", "date", "comment", "bucket", "type", "score",
   "post_or_ad", "link", "hidden", "brand_replied", "is_reply", "replying_to"];
 
 /** A cell that opens safely: quoted when needed, and never run as a formula by Excel/Sheets. */
@@ -39,7 +39,7 @@ export function buildCsv(rows: ExportRow[], note?: string): string {
     lines.push([
       r.commenter || (r.platform === "facebook" ? "Facebook user (name not shared by Meta)" : "Instagram user"),
       r.platform === "instagram" ? "Instagram" : "Facebook",
-      who(r) ? count(r) : "", fmt(r.time), r.text, r.bucket, r.type, r.needsReview ? "yes" : "no",
+      who(r) ? count(r) : "", fmt(r.time), r.text, r.bucket, r.type, r.score != null ? `${r.score}%` : "",
       r.post, r.link, r.hidden ? "yes" : "no", r.brandReplied ? "yes" : "no", r.isReply ? "yes" : "no", r.replyingTo,
     ].map(cell).join(","));
   }

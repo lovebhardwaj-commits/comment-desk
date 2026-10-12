@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Lightbulb, Copy, Check, Instagram, Facebook } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Lightbulb, Instagram, Facebook } from "lucide-react";
 import { api } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { logEvent } from "./log";
@@ -42,12 +42,8 @@ const NOUN: Record<Bucket, string> = { Enquiry: "enquiries", Positive: "positive
 const ASK: Record<Bucket, string> = { Enquiry: "What are people asking?", Positive: "Why are people happy?", Negative: "What's going wrong?" };
 
 /** "Why are people saying this?" for one category: themes, counts, real example comments and suggestions. */
-export default function InsightsPanel({ bucket, comments, context, saveKey, onJump, counts, onSwitch }: {
+export default function InsightsPanel({ bucket, comments, context, saveKey, onJump }: {
   bucket: Bucket; comments: InsightComment[]; context: string; saveKey: string; onJump: (id: string) => void;
-  /** Open comments per category, for the switcher. */
-  counts?: Record<Bucket, number>;
-  /** Move to another category, or back to all comments (null). Without it, the switcher uses the category cards above. */
-  onSwitch?: (b: Bucket | null) => void;
 }) {
   const [setup, setSetup] = useState<{ configured: boolean; model?: string; missing?: string[] } | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -56,7 +52,6 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(true);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => { getSetup().then(setSetup); }, []);
   // A different category, window or filter has its own saved analysis.
@@ -65,23 +60,6 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
     cacheGet<Saved>(saveKey).then((c) => { if (c) { setSaved(c.value); setSavedAt(c.at); } });
   }, [saveKey]);
 
-  // Without onSwitch/counts from the parent, the switcher drives the category cards above the panel
-  // (the same buttons a person would click) and reads their numbers.
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [cardCounts, setCardCounts] = useState<Record<Bucket, number> | null>(null);
-  const LABEL: Record<Bucket | "All", string> = { All: "Open", Enquiry: "Enquiry", Positive: "Positive", Negative: "Negative" };
-  const cardFor = (b: Bucket | "All") => {
-    const scope = cardRef.current?.closest(".panel-content") || document;
-    return [...scope.querySelectorAll<HTMLButtonElement>(".kpi")].find((k) => k.querySelector(".kpi-label")?.textContent?.trim().toLowerCase() === LABEL[b].toLowerCase());
-  };
-  useEffect(() => {
-    if (counts) return;
-    const read = (b: Bucket) => Number((cardFor(b)?.querySelector(".kpi-value")?.textContent || "0").replace(/[^0-9]/g, "")) || 0;
-    setCardCounts({ Enquiry: read("Enquiry"), Positive: read("Positive"), Negative: read("Negative") });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [counts, bucket, comments.length]);
-  const shownCounts = counts || cardCounts;
-  const switchTo = (b: Bucket | null) => (onSwitch ? onSwitch(b) : cardFor(b || "All")?.click());
 
   const byId = new Map(comments.map((c) => [c.id, c]));
   const enough = comments.filter((c) => c.text.trim()).length >= 3;
@@ -178,48 +156,26 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
     } finally { setRunning(false); setBatchProgress(null); }
   }
 
-  async function copy() {
-    if (!saved) return;
-    const r = saved.result;
-    const text = [`${ASK[bucket]} (${context}, ${r.analysed} ${NOUN[bucket]})`, r.summary, "",
-      ...r.themes.flatMap((t) => [`• ${t.title} (${t.count}, ${t.share}%): ${t.explanation}`, ...(t.suggestion ? [`  → ${t.suggestion}`] : []),
-        ...t.exampleIds.map((id) => byId.get(id)).filter(Boolean).map((c) => `  "${c!.text.slice(0, 140)}"`)])].join("\n");
-    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
-  }
 
-  // Switch between categories (each keeps its own saved analysis) or go back to all comments.
-  const switcher = (
-    <div className="ai-switch" role="group" aria-label="Analyse another category">
-      <button onClick={() => switchTo(null)} title="Back to all comments">All comments</button>
-      {(["Enquiry", "Positive", "Negative"] as const).map((b) => (
-        <button key={b} aria-pressed={b === bucket} onClick={() => b !== bucket && switchTo(b)} disabled={running}>
-          {b === "Enquiry" ? "Enquiries" : b}{shownCounts && <span className="n">{shownCounts[b].toLocaleString("en-IN")}</span>}
-        </button>
-      ))}
-    </div>
-  );
 
   // ---------- Not set up ----------
   if (setup && !setup.configured) {
     return (
-      <div className="ai-card ai-muted" ref={cardRef}>
-        {switcher}
+      <div className="ai-card ai-muted">
         <div className="ai-head"><Sparkles /><strong>{ASK[bucket]}</strong></div>
-        <div className="ai-note">AI analysis isn&apos;t switched on yet. Add {setup.missing?.length ? setup.missing.join(" and ") : "the OpenRouter settings"} in Vercel (Settings → Environment Variables), then redeploy. Steps are in the README.</div>
+        <div className="ai-note">AI analysis isn&apos;t available yet.</div>
       </div>
     );
   }
 
   const r = saved?.result;
   return (
-    <div className="ai-card" ref={cardRef}>
-      {switcher}
+    <div className="ai-card">
       <div className="ai-head">
         <Sparkles /><strong>{ASK[bucket]}</strong>
         {r && <span className="ai-meta">{r.failedBatches ? `${r.analysed.toLocaleString("en-IN")} of ${r.total.toLocaleString("en-IN")}` : r.analysed.toLocaleString("en-IN")} {NOUN[bucket]}{r.sampled && !r.failedBatches ? ` (an even sample of ${r.total.toLocaleString("en-IN")})` : ""} · {ago(savedAt || Date.parse(r.at))}</span>}
         <span className="spacer" />
-        {r && <button className="btn btn-sm btn-ghost" onClick={copy} title="Copy this analysis as text">{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy"}</button>}
-        {r && <button className="btn btn-sm btn-ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? <ChevronUp /> : <ChevronDown />}{open ? "Hide themes" : `Show ${r.themes.length} themes`}</button>}
+        {r && <button className="btn btn-sm btn-ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? <ChevronUp /> : <ChevronDown />}{open ? "Collapse" : "Expand"}</button>}
         <button className={`btn btn-sm${r ? "" : " btn-primary"}`} onClick={run} disabled={running || !enough || !setup}
           title={!enough ? "Needs at least 3 comments with text" : r ? "Analyse again with the comments shown now" : `Group these ${NOUN[bucket]} into themes with AI`}>
           {running ? <span className="spinner sm" aria-hidden /> : r ? <RefreshCw /> : <Sparkles />}
@@ -275,10 +231,9 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
               </div>
             ))}
           </div>
-          <div className="ai-foot">
-            {r.failedBatches ? <span className="warn">{r.failedBatches} of {r.batches} batches couldn&apos;t be analysed, so {(r.total - r.analysed).toLocaleString("en-IN")} comments are missing. Re-run to try again. </span> : null}
-            All {r.analysed.toLocaleString("en-IN")} comments are counted in exactly one theme{r.unassigned > 0 ? ` (${r.unassigned} didn't fit)` : ""}. Counts and examples are checked against the real comments. Themes are written by AI, so read them as a guide.
-          </div>
+          {r.failedBatches ? (
+            <div className="ai-foot"><span className="warn">{(r.total - r.analysed).toLocaleString("en-IN")} comments couldn&apos;t be analysed. Re-run to try again.</span></div>
+          ) : null}
         </>
       )}
     </div>
