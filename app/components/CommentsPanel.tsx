@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download, MoreHorizontal, Languages, Check } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download, MoreHorizontal, Languages, Check } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
@@ -154,7 +154,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [captionOpen, setCaptionOpen] = useState(false);
-  const [warnedNotSaved, setWarnedNotSaved] = useState(false);
   const [verified, setVerified] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState<Record<string, string>>({});
   const movingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -643,46 +642,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
   }
 
-  const resultFor = (label: string): Result => ({
-    category: label === "Enquiry" || label === "Positive" ? (label as Category) : "Negative",
-    negative_type: label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null,
-    needs_review: false, reason: "Corrected by your team", label, score: 1,
-  });
-
-  /** Changes a comment's category straight away, saves it in the background, and puts it back if saving fails. */
-  async function correct(c: Comment, label: string) {
-    const same = (x: Comment) => x.text.trim().toLowerCase() === c.text.trim().toLowerCase();
-    const ids = (comments || []).filter(same).map((x) => x.id);
-    const before = Object.fromEntries(ids.map((id) => [id, results[id]]));
-    const next = resultFor(label);
-    setResults((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, next])) }));
-    resultsRef.current = { ...resultsRef.current, ...Object.fromEntries(ids.map((id) => [id, next])) };
-    persistSoon();
-
-    const name = CHOICES.find(([v]) => v === label)?.[1] || label;
-    const newCat = next.category;
-    const leaves = filter !== "All" && newCat !== filter;
-    if (leaves) {
-      // Keep it on screen briefly so the person sees where it went, then let it leave this view.
-      clearTimeout(movingTimers.current[c.id]);
-      setMoving((m) => ({ ...m, [c.id]: newCat }));
-      movingTimers.current[c.id] = setTimeout(() => setMoving((m) => { const n = { ...m }; delete n[c.id]; return n; }), 1600);
-    }
-    toast({ kind: "ok", msg: `Moved to ${name}.`, action: leaves ? { label: `View ${newCat}`, run: () => setFilter(newCat as Filter) } : undefined });
-
-    try {
-      const d = await api<{ persistent: boolean }>("/api/label", { method: "POST", body: JSON.stringify({ text: c.text, label }) });
-      if (!d.persistent && !warnedNotSaved) {
-        setWarnedNotSaved(true);
-        toast({ kind: "err", msg: "Corrections aren't stored permanently yet: add Upstash Redis in Vercel (see README)." });
-      }
-    } catch (e: any) {
-      setResults((r) => ({ ...r, ...before }));
-      setMoving((m) => { const n = { ...m }; delete n[c.id]; return n; });
-      toast({ kind: "err", msg: `Couldn't save the correction, so it was put back: ${e.message}` });
-    }
-  }
-
   // Comments inside the chosen time window (the cache may hold a longer window).
   const sinceMs = inbox ? inbox.sinceMs : 0;
   const untilMs = inbox ? inbox.untilMs : 0;
@@ -759,22 +718,16 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     if (complaints.length) return {
       tone: "danger", tag: "Needs attention",
       title: `${fmtN(complaints.length)} ${complaints.length === 1 ? "customer has" : "customers have"} an order or product problem`,
-      body: "Hiding a complaint doesn't remove it for the customer: they and their friends can still see it.",
-      action: "→ Reply or send a DM first, then hide if it's still public.",
       button: filter === "Negative" ? null : { label: "Show negatives", run: () => setFilter("Negative") },
     };
     if (spam.length) return {
       tone: "info", tag: "Info",
       title: `${fmtN(spam.length)} spam ${spam.length === 1 ? "comment" : "comments"} can be hidden`,
-      body: "Promotions, scams and bots make real questions harder to find.",
-      action: "→ Review and hide them in one go.",
       button: { label: "Select spam", run: () => { setFilter("Negative"); setSelected(new Set(spam.map((c) => c.id))); } },
     };
     if (openEnq.length) return {
       tone: "info", tag: "Info",
       title: `${fmtN(openEnq.length)} ${openEnq.length === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
-      body: "People asking about price, sizes or delivery are the closest to buying.",
-      action: "→ Reply while interest is fresh.",
       button: filter === "Enquiry" ? null : { label: "Show enquiries", run: () => setFilter("Enquiry") },
     };
     return null;
@@ -962,10 +915,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div className="callout-main">
             <div className="callout-tag">{insight.tag}</div>
             <div className="callout-title">{insight.title}</div>
-            <div className="callout-body">
-              {insight.body}
-              {insight.action && <div className="action">{insight.action}</div>}
-            </div>
           </div>
           {insight.button && <button className="btn btn-sm" onClick={insight.button.run}>{insight.button.label}</button>}
         </div>
@@ -1154,13 +1103,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                 {!c.isBrand && (
                   <div className="c-foot">
                     {r && r.category !== "Unclassified" ? (
-                      <span className={`catsel cat-${r.category}`}>
-                        <select aria-label="Category (change to correct it)" title="Wrong? Change it and Comment Pulse learns from it"
-                          value={labelOf(r)} disabled={!!busy[`fix:${c.id}`]} onChange={(e) => correct(c, e.target.value)}>
-                          {CHOICES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-                        </select>
-                        <ChevronDown />
-                      </span>
+                      <span className={`cat-chip cat-${r.category}`}>{CHOICES.find(([v]) => v === labelOf(r))?.[1] || r.category}</span>
                     ) : c.text.trim() ? <span className="skel cat-pending" aria-label="Categorising" /> : null}
                     {r?.score != null && <span className="score" title="How sure the app is about this category">{Math.round(r.score * 100)}%</span>}
                     {translateOn && !translations[c.id] && foreignLanguage(c.text) && (
