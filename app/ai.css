@@ -52,3 +52,11 @@
 .toolbar .seg[aria-label="Platform"] button { padding: 0 10px; gap: 5px; }
 /* ── Translation label ── */
 .c-translation .tr-label { font-weight: 600; color: var(--muted); margin-right: 4px; white-space: nowrap; }
+
+/* ── Every comment on the same left edge; a reply shows "Replying to: …" instead of being indented ── */
+.comment.is-reply { margin-left: 0; }
+/* ── Category: a plain label (no dropdown) ── */
+.cat-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; font-weight: 700; }
+.cat-chip.cat-Enquiry { background: var(--enquiry-soft); color: var(--enquiry); }
+.cat-chip.cat-Positive { background: var(--positive-soft); color: var(--positive); }
+.cat-chip.cat-Negative { background: var(--negative-soft); color: var(--negative); }

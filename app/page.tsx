@@ -54,7 +54,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
       <p>Every comment on your merchants&apos; Facebook and Instagram posts and ads, sorted into Enquiry, Positive and Negative, so you can reply faster and hide what shouldn&apos;t be public.</p>
       {error && <p className="error" role="alert">{error}</p>}
       <a className="btn btn-primary btn-lg" style={{ width: "100%" }} href="/api/auth/login">Continue with Facebook</a>
-      <p className="fine">You&apos;ll see the Pages, Instagram accounts and ad accounts you manage. Tick every account you want to work on when Facebook asks.</p>
     </Card>
   );
 }
