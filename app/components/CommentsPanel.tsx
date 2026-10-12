@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, ChevronUp, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download, Sparkles } from "lucide-react";
+import { Instagram, Facebook, ExternalLink, Search, EyeOff, Eye, ChevronDown, CornerDownRight, ImageIcon, MessageCircle, BadgeCheck, Megaphone, ShieldCheck, ArrowRight, AlertTriangle, CheckCircle2, Inbox, ChevronRight, Info, Reply, Download, MoreHorizontal, Languages, Check } from "lucide-react";
 import { api, fmtDateTime } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
 import { useToast, Empty, CommentSkeleton, initials, Modal } from "./ui";
@@ -9,6 +9,8 @@ import ReplyBox from "./ReplyBox";
 import { commentChecks, pageCheck, postCheck, hiddenCheck } from "./graphDebug";
 import { buildCsv, downloadCsv, csvName, type ExportRow } from "./exportCsv";
 import InsightsPanel, { type InsightComment } from "./InsightsPanel";
+import { foreignLanguage } from "./lang";
+import { learnReplies, suggestionsFor } from "./learnReplies";
 
 export type Target = {
   key: string; platform: "instagram" | "facebook"; objectId: string; pageId: string;
@@ -98,8 +100,10 @@ async function readStream(url: string, body: unknown, onLine: (o: any) => void) 
   }
 }
 type Category = "Enquiry" | "Positive" | "Negative" | "Unclassified";
-type Result = { category: Category; negative_type: string | null; needs_review: boolean; reason: string; label?: string };
-type Filter = "All" | "Enquiry" | "Positive" | "Negative" | "Review";
+type Result = { category: Category; negative_type: string | null; needs_review: boolean; reason: string; label?: string; score?: number };
+type Filter = "All" | "Enquiry" | "Positive" | "Negative";
+/** A comment in another language, translated to English (and re-scored from the translation). */
+type Translated = { language: string; english: string };
 
 // Options when correcting a comment. Values are the built-in model's labels.
 const CHOICES: [string, string][] = [
@@ -117,7 +121,6 @@ const KPI: { key: Filter; label: string; color: string }[] = [
   { key: "Enquiry", label: "Enquiry", color: "var(--enquiry)" },
   { key: "Positive", label: "Positive", color: "var(--positive)" },
   { key: "Negative", label: "Negative", color: "var(--negative)" },
-  { key: "Review", label: "To review", color: "var(--warn)" },
 ];
 
 const CHUNK = 100;
@@ -128,6 +131,10 @@ const BATCHES_AT_ONCE = 2;
 const fmtN = (n: number) => n.toLocaleString("en-IN");
 
 type HideResult = { id: string; ok: boolean; verified: boolean; hidden: boolean; error?: string };
+// Translation uses the same OpenRouter setup as AI analysis; the Translate options only show when it's set up.
+let aiReady: Promise<boolean> | null = null;
+const aiAvailable = () => (aiReady ??= api<{ configured: boolean }>("/api/insights").then((d) => !!d.configured).catch(() => false));
+const TRANSLATE_CHUNK = 50;
 const BATCH = 50;
 
 export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 }: { target?: Target; inbox?: InboxSpec; headerExtra?: ReactNode; refresh?: number }) {
@@ -160,6 +167,14 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [skipComplaints, setSkipComplaints] = useState(false);
   const [hideAllRun, setHideAllRun] = useState<{ done: number; total: number } | null>(null);
   const [hideAllResult, setHideAllResult] = useState<{ hidden: string[]; failed: HideResult[] } | null>(null);
+  // Translations of comments in other languages (saved in the browser), and whether translation is available.
+  const [translations, setTranslations] = useState<Record<string, Translated>>({});
+  const [translating, setTranslating] = useState(false);
+  const [translateOn, setTranslateOn] = useState(false);
+  useEffect(() => {
+    aiAvailable().then(setTranslateOn);
+    cacheGet<Record<string, Translated>>("translations").then((c) => { if (c) setTranslations(c.value); });
+  }, []);
 
   // Categorising runs in the background as comments arrive; results already cached are skipped.
   const resultsRef = useRef<Record<string, Result>>({});
@@ -573,10 +588,50 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     }
   }
 
+  /** Translates comments in other languages to English and re-scores them from the translation (50 per request). */
+  async function translateMany(list: Comment[]) {
+    const todo = list.filter((c) => !translations[c.id] && foreignLanguage(c.text));
+    if (!todo.length || translating) return;
+    setTranslating(true);
+    const fresh: Record<string, Translated> = {};
+    const freshResults: Record<string, Result> = {};
+    try {
+      for (let i = 0; i < todo.length; i += TRANSLATE_CHUNK) {
+        const chunk = todo.slice(i, i + TRANSLATE_CHUNK);
+        const d = await api<{ results: Record<string, { language: string; english: string; result: Result }>; error?: string }>("/api/translate", {
+          method: "POST", body: JSON.stringify({ comments: chunk.map((c) => ({ id: c.id, text: c.text })) }),
+        });
+        if (d.error) throw new Error(d.error);
+        for (const [id, v] of Object.entries(d.results || {})) {
+          fresh[id] = { language: v.language, english: v.english };
+          freshResults[id] = { ...v.result, reason: `Translated from ${v.language}` };
+        }
+      }
+    } catch (e: any) {
+      toast({ kind: "err", msg: `Couldn't translate${Object.keys(fresh).length ? " all of them" : ""}: ${e.message}` });
+      logEvent({ level: "error", area: "translate", message: `Translation failed: ${e.message}`, details: { comments: todo.length } });
+    } finally {
+      const n = Object.keys(fresh).length;
+      if (n) {
+        setTranslations((t) => {
+          const all = Object.entries({ ...t, ...fresh });
+          const kept = Object.fromEntries(all.slice(-3000));
+          cacheSet("translations", kept);
+          return kept;
+        });
+        resultsRef.current = { ...resultsRef.current, ...freshResults };
+        setResults((r) => ({ ...r, ...freshResults }));
+        persistSoon();
+        toast({ kind: "ok", msg: `Translated ${fmtN(n)} comment${n === 1 ? "" : "s"} and updated ${n === 1 ? "its" : "their"} category.` });
+      }
+      setTranslating(false);
+    }
+  }
+
   const resultFor = (label: string): Result => ({
     category: label === "Enquiry" || label === "Positive" ? (label as Category) : "Negative",
     negative_type: label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null,
-    needs_review: false, reason: "Corrected by your team", label,
+    needs_review: false, reason: "Corrected by your team", label, score: 1,
   });
 
   /** Changes a comment's category straight away, saves it in the background, and puts it back if saving fails. */
@@ -591,7 +646,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
     const name = CHOICES.find(([v]) => v === label)?.[1] || label;
     const newCat = next.category;
-    const leaves = filter !== "All" && filter !== "Review" && newCat !== filter;
+    const leaves = filter !== "All" && newCat !== filter;
     if (leaves) {
       // Keep it on screen briefly so the person sees where it went, then let it leave this view.
       clearTimeout(movingTimers.current[c.id]);
@@ -629,16 +684,15 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const customer = useMemo(() => allCustomer.filter((c) => !c.hidden), [allCustomer]);
 
   const counts = useMemo(() => {
-    const c = { All: customer.length, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
+    const c = { All: customer.length, Enquiry: 0, Positive: 0, Negative: 0 };
     for (const x of customer) {
       const r = results[x.id];
       if (r && r.category !== "Unclassified") c[r.category]++;
-      if (r?.needs_review) c.Review++;
     }
     return c;
   }, [customer, results]);
   const hiddenCounts = useMemo(() => {
-    const c = { All: 0, Enquiry: 0, Positive: 0, Negative: 0, Review: 0 };
+    const c = { All: 0, Enquiry: 0, Positive: 0, Negative: 0 };
     for (const x of allCustomer) {
       if (!x.hidden) continue;
       c.All++;
@@ -657,8 +711,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     const open = inView.length - brand - hidden;
     return { loaded: inView.length, open, hidden, brand };
   }, [comments, sinceMs, untilMs, plat]);
-  const reported = !inbox ? target?.count : undefined;
-  const notReturned = reported != null ? Math.max(0, reported - tally.loaded) : 0;
 
   // Open comments per platform in the window, so it's obvious whether Instagram and Facebook are both there.
   const platCounts = useMemo(() => {
@@ -681,18 +733,20 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     return s;
   }, [comments, sent]);
 
+  // Only what needs action in the category being looked at: Negative → complaints, then spam; Enquiry → unanswered
+  // enquiries; All → the most urgent of those; Positive → nothing to act on, so no box.
   const insight = useMemo(() => {
-    if (progress || !customer.length) return null;
+    if (progress || !customer.length || filter === "Positive") return null;
     const visible = customer;
-    const complaints = visible.filter((c) => results[c.id]?.negative_type === "complaint");
-    const openEnq = visible.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id));
-    const spam = visible.filter((c) => results[c.id]?.negative_type === "spam" && c.canHide);
+    const complaints = filter === "Enquiry" ? [] : visible.filter((c) => results[c.id]?.negative_type === "complaint");
+    const openEnq = filter === "Negative" ? [] : visible.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id));
+    const spam = filter === "Enquiry" ? [] : visible.filter((c) => results[c.id]?.negative_type === "spam" && c.canHide);
     if (complaints.length) return {
       tone: "danger", tag: "Needs attention",
       title: `${fmtN(complaints.length)} ${complaints.length === 1 ? "customer has" : "customers have"} an order or product problem`,
       body: "Hiding a complaint doesn't remove it for the customer: they and their friends can still see it.",
       action: "→ Reply or send a DM first, then hide if it's still public.",
-      button: { label: "Show negatives", run: () => setFilter("Negative") },
+      button: filter === "Negative" ? null : { label: "Show negatives", run: () => setFilter("Negative") },
     };
     if (spam.length) return {
       tone: "info", tag: "Info",
@@ -706,13 +760,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       title: `${fmtN(openEnq.length)} ${openEnq.length === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
       body: "People asking about price, sizes or delivery are the closest to buying.",
       action: "→ Reply while interest is fresh.",
-      button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
+      button: filter === "Enquiry" ? null : { label: "Show enquiries", run: () => setFilter("Enquiry") },
     };
-    return {
-      tone: "info", tag: "Info", title: inbox ? `Nothing needs action ${inbox.phrase}` : "Nothing needs action on this post",
-      body: "No complaints, spam or unanswered enquiries.", action: "", button: null,
-    };
-  }, [customer, results, replied, progress]);
+    return null;
+  }, [customer, results, replied, progress, filter]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -723,9 +774,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       if (q && !c.text.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
       if (filter === "All") return true;
       if (moving[c.id]) return true;
-      const r = results[c.id];
-      if (filter === "Review") return !!r?.needs_review;
-      return r?.category === filter;
+      return results[c.id]?.category === filter;
     });
     // Brand replies (toggle on): under any comment in view, whatever the category or search. On "All" without a search,
     // brand comments that don't answer anyone are shown too.
@@ -759,7 +808,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         commenter: c.author, platform: platOf(c), time: c.time, text: c.text || "(sticker or image)",
         bucket: r ? BUCKET[r.category] || "Not categorised" : "Not categorised",
         type: r?.category === "Negative" ? (r.negative_type === "abuse" ? "criticism" : r.negative_type || "") : "",
-        needsReview: !!r?.needs_review,
+        score: r?.score != null ? Math.round(r.score * 100) : null,
         post: src ? `${src.kind === "ad" ? "Ad · " : ""}${src.label || src.caption}` : target?.title || "",
         link: (src ? src.permalink : target?.permalink) || "",
         hidden: c.hidden, brandReplied: replied.has(c.id), isReply: !!c.parentId,
@@ -774,7 +823,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     if (sync.failed) gaps.push(`${sync.failed} could not be loaded`);
     if (sync.skipped) gaps.push(`${sync.skipped} were skipped for time`);
     if (sync.gap) gaps.push(`Meta counts ${sync.gap.reported} comments on this post but returned ${sync.gap.got}`);
-    const filters = [filter !== "All" ? `category: ${filter === "Review" ? "to review" : filter}` : "", plat !== "all" ? `platform: ${plat}` : "", query.trim() ? `search: "${query.trim()}"` : "", !showHidden ? "hidden comments left out" : ""].filter(Boolean);
+    const filters = [filter !== "All" ? `category: ${filter}` : "", plat !== "all" ? `platform: ${plat}` : "", query.trim() ? `search: "${query.trim()}"` : "", !showHidden ? "hidden comments left out" : ""].filter(Boolean);
     const note = [gaps.length ? `This file may be incomplete: ${gaps.join("; ")}.` : "", filters.length ? `Filtered by ${filters.join(", ")}.` : ""].filter(Boolean).join(" ");
     const scope = inbox ? [inbox.scope.split(" · ")[0], inbox.noun === "ad" ? "ad comments" : "post comments", inbox.label] : [target?.kind === "ad" ? "ad" : "post", target?.title || ""];
     downloadCsv(buildCsv(rows, note || undefined), csvName([...scope, filter !== "All" ? filter : ""]));
@@ -797,6 +846,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1600);
   }
+
+  // The brand's usual replies per kind of comment, learned from its own past replies once comments are categorised.
+  const learned = useMemo(() => learnReplies(comments || [], (id) => (results[id] ? labelOf(results[id]) : null)), [comments, results]);
+  // Comments in a language the built-in model can't read, still untranslated, in this view.
+  const foreign = translateOn ? visible.filter((c) => !c.isBrand && !translations[c.id] && foreignLanguage(c.text)) : [];
+  const foreignLangs = [...new Set(foreign.map((c) => foreignLanguage(c.text)!))];
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
@@ -821,7 +876,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
   const PlatformIcon = target?.platform === "instagram" ? Instagram : Facebook;
   const windowLabel = inbox ? inbox.label : "";
-  const fmtRange = (ms: number) => new Date(ms).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
   return (
     <div>
@@ -831,24 +885,13 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div style={{ minWidth: 0, flex: 1 }}>
             <h2>All comments · {windowLabel}</h2>
             <div className="caption">{inbox.scope}</div>
-            <div className="range-line">Showing comments from <b>{fmtRange(inbox.sinceMs)}</b> to <b>{inbox.untilMs >= Date.now() - 120_000 ? "now" : fmtRange(inbox.untilMs)}</b></div>
-            <div className="hero-meta">
-              <SyncLine sync={sync} noun={inbox.noun || "post"} />
-            </div>
-            {comments && sync.phase === "ready" && (tally.hidden > 0 || tally.brand > 0) && (
-              <div className="breakdown-line">
-                {tally.loaded.toLocaleString("en-IN")} comments in this window = <b>{tally.open.toLocaleString("en-IN")} open</b>
-                {` + ${tally.hidden.toLocaleString("en-IN")} hidden + ${tally.brand.toLocaleString("en-IN")} brand replies`}
-              </div>
-            )}
-            <LimitNotes sync={sync} noun={inbox.noun || "post"} status={inbox.status} />
+            <div className="hero-meta"><Refreshed sync={sync} /></div>
           </div>
         </div>
       ) : target ? (
       <div className="card post-hero">
         {target!.image ? <img className="thumb" src={target!.image} alt="" /> : <span className="thumb">{target!.kind === "ad" ? <Megaphone /> : <ImageIcon />}</span>}
         <div style={{ minWidth: 0, flex: 1 }}>
-          <h2>{target!.title}</h2>
           {target!.caption && (
             <>
               <div className={`caption${captionOpen ? " open" : ""}`}>{target!.caption}</div>
@@ -858,22 +901,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <div className="hero-meta">
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target!.platform === "instagram" ? "Instagram" : "Facebook"}{target!.kind === "ad" ? " ad" : " post"}</span>
             {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
-            <a href={`/api/diagnose/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId })}`} target="_blank" rel="noreferrer"
-              title="Opens exactly what Meta returns for this post's comments: who wrote each one, and whether Meta sent their name">What Meta sent<ExternalLink /></a>
-            <SyncLine sync={sync} noun="post" single />
+            <Refreshed sync={sync} />
           </div>
-          {comments && sync.phase === "ready" && reported != null && (
-            <Breakdown platform={target!.platform} reported={reported} tally={tally} notReturned={notReturned} />
-          )}
-          {sync.gap && (
-            <div className="limit-notes">
-              <div className="limit-note"><Info />
-                <span>Meta reports {sync.gap.reported} comments on this {target!.kind === "ad" ? "ad" : "post"}, but only {sync.gap.got} came back.{" "}
-                  <a href={`/api/diagnose/comments?${new URLSearchParams({ platform: target!.platform, objectId: target!.objectId, pageId: target!.pageId })}`} target="_blank" rel="noreferrer">See what Meta returned</a>
-                </span>
-              </div>
-            </div>
-          )}
           {headerExtra && <div className="hero-switch">{headerExtra}</div>}
         </div>
       </div>
@@ -897,16 +926,14 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           const share = counts.All ? Math.round((100 * n) / counts.All) : 0;
           return (
             <button key={k.key} className="kpi" aria-pressed={filter === k.key} onClick={() => setFilter(k.key)} style={{ ["--k" as any]: k.color }}
-              title={k.key === "All" ? "Show all comments" : k.key === "Review" ? "Show comments the model wasn't sure about" : `Show only ${k.label.toLowerCase()} comments`}>
+              title={k.key === "All" ? "Show all comments" : `Show only ${k.label.toLowerCase()} comments`}>
               <div className="kpi-label" title={k.key === "All" ? "Customer comments that are still visible on Instagram or Facebook. Hidden comments and the brand's own replies aren't counted." : undefined}><i />{k.label}</div>
               <div className="kpi-value">{comments ? n.toLocaleString("en-IN") : "–"}</div>
               <div className="kpi-sub">
                 {k.key === "All"
-                  ? (progress ? "Categorising…"
-                    : reported != null ? `of ${reported.toLocaleString("en-IN")} on ${target?.platform === "instagram" ? "Instagram" : "Facebook"}`
-                    : tally.hidden ? `${tally.hidden.toLocaleString("en-IN")} hidden not counted` : "still visible")
+                  ? (progress ? "Categorising…" : tally.hidden ? `${tally.hidden.toLocaleString("en-IN")} hidden not counted` : "still visible")
                   : comments ? `${share}%` : " "}
-                {k.key !== "Review" && k.key !== "All" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
+                {k.key !== "All" && hiddenCounts[k.key] > 0 && <span className="hid"> · {hiddenCounts[k.key]} hidden</span>}
               </div>
               {k.key !== "All" && <span className="kpi-bar" style={{ width: `${share}%` }} />}
             </button>
@@ -930,17 +957,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         </div>
       )}
 
-      {aiBucket ? (
-        <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo}
-          counts={{ Enquiry: counts.Enquiry, Positive: counts.Positive, Negative: counts.Negative }} onSwitch={(b) => setFilter(b || "All")} />
-      ) : filter === "All" && comments && customer.length >= 3 && !progress ? (
-        <div className="ai-prompt">
-          <Sparkles />Why are people saying this?
-          {(["Enquiry", "Positive", "Negative"] as const).filter((b) => counts[b] > 0).map((b) => (
-            <button key={b} className="btn btn-sm btn-ghost" onClick={() => setFilter(b)}>{b === "Enquiry" ? "Enquiries" : b} ({counts[b]})</button>
-          ))}
-        </div>
-      ) : null}
+      {aiBucket && <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />}
 
       <div className="toolbar">
         <label className="search">
@@ -959,33 +976,44 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           <button aria-pressed={sort === "newest"} onClick={() => setSort("newest")}>Newest</button>
           <button aria-pressed={sort === "oldest"} onClick={() => setSort("oldest")}>Oldest</button>
         </div>
-        <button className="btn btn-sm" onClick={exportCsv} disabled={!exportable.length || !!progress || busyNow}
-          title={progress ? "Wait until every comment is categorised" : `Download the comments shown here (this time window and filters) as a CSV file${hiddenCounts.All && showHidden ? `, including ${hiddenCounts.All} hidden` : ""}`}>
-          <Download />{progress ? "Categorising…" : `Download CSV (${exportable.length.toLocaleString("en-IN")})`}
-        </button>
         <span className="spacer" />
-        {negativeTargets.length > 0 && !progress && (
+        {filter === "Negative" && negativeTargets.length > 0 && !progress && (
           <button className="btn btn-sm btn-danger" onClick={() => { setHideAllResult(null); setHideAllOpen(true); }}>
             <EyeOff />Hide all negative ({fmtN(negativeTargets.length)})
           </button>
         )}
-        {hiddenCounts.All > 0 && (
-          <label className="toggle" title="Comments already hidden on Instagram or Facebook">
-            <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
-            <span className="track" />Hidden ({fmtN(hiddenCounts.All)})
-          </label>
-        )}
-        <label className="toggle">
-          <input type="checkbox" checked={showBrand} onChange={(e) => setShowBrand(e.target.checked)} />
-          <span className="track" />Brand replies
-        </label>
-        {hideable.length > 0 && (
-          <label className="toggle" title="Select every comment that can be hidden in this view">
-            <input type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(hideable.map((c) => c.id)))} />
-            <span className="track" />Select all
-          </label>
-        )}
+        <MoreMenu>
+          <button role="menuitem" data-close onClick={exportCsv} disabled={!exportable.length || !!progress || busyNow}
+            title={progress ? "Wait until every comment is categorised" : undefined}>
+            <Download />{progress ? "Download CSV (categorising…)" : `Download CSV (${fmtN(exportable.length)})`}
+          </button>
+          {hiddenCounts.All > 0 && (
+            <button role="menuitemcheckbox" aria-checked={showHidden} onClick={() => setShowHidden((v) => !v)}>
+              {showHidden ? <Check /> : <span className="mm-box" />}Show hidden comments ({fmtN(hiddenCounts.All)})
+            </button>
+          )}
+          <button role="menuitemcheckbox" aria-checked={showBrand} onClick={() => setShowBrand((v) => !v)}>
+            {showBrand ? <Check /> : <span className="mm-box" />}Show brand replies
+          </button>
+        </MoreMenu>
       </div>
+
+      {foreign.length > 0 && (
+        <div className="translate-bar">
+          <Languages />
+          <span>{fmtN(foreign.length)} comment{foreign.length === 1 ? " is" : "s are"} in {foreignLangs.slice(0, 3).join(", ")}{foreignLangs.length > 3 ? " and more" : ""}. Translate for an accurate category.</span>
+          <button className="btn btn-sm" disabled={translating} onClick={() => translateMany(foreign)}>
+            <Languages />{translating ? "Translating…" : foreign.length === 1 ? "Translate" : `Translate all ${fmtN(foreign.length)}`}
+          </button>
+        </div>
+      )}
+
+      {hideable.length > 0 && (
+        <label className="select-all">
+          <input type="checkbox" className="check" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(hideable.map((c) => c.id)))} />
+          Select all {fmtN(hideable.length)}
+        </label>
+      )}
 
       {selectedHideable.length > 0 && (
         <div className="bulkbar" role="region" aria-label="Bulk actions">
@@ -1104,6 +1132,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                 )}
                 {c.parentId && c.parentText && <div className="c-parent">Replying to: {c.parentText}</div>}
                 <p className="c-text">{c.text || <em style={{ color: "var(--muted)" }}>Sticker or image</em>}</p>
+                {translations[c.id] && <p className="c-translation" title={`Translated from ${translations[c.id].language}`}><Languages />{translations[c.id].english}</p>}
                 {!c.isBrand && (
                   <div className="c-foot">
                     {r && r.category !== "Unclassified" ? (
@@ -1115,8 +1144,12 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                         <ChevronDown />
                       </span>
                     ) : c.text.trim() ? <span className="skel cat-pending" aria-label="Categorising" /> : null}
-                    {r?.needs_review && <span className="tag tag-review">Needs review</span>}
-                    <span className="c-reason">{r?.reason}</span>
+                    {r?.score != null && <span className="score" title="How sure the app is about this category">{Math.round(r.score * 100)}%</span>}
+                    {translateOn && !translations[c.id] && foreignLanguage(c.text) && (
+                      <button className="linkish translate" disabled={translating} onClick={() => translateMany([c])}>
+                        <Languages />{foreignLanguage(c.text)} · Translate
+                      </button>
+                    )}
                     <span className="c-actions">
                       <button className="btn btn-sm btn-ghost" onClick={() => setReplyingTo(replyingTo === c.id ? null : c.id)} aria-expanded={replyingTo === c.id}><Reply />Reply</button>
                       {c.canHide ? (
@@ -1135,6 +1168,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                 {replyingTo === c.id && !c.isBrand && (
                   <ReplyBox to={c.author ? (platOf(c) === "instagram" ? `@${c.author}` : c.author) : platOf(c) === "facebook" ? "this Facebook user" : "this comment"}
                     platform={platOf(c)} asName={brandName(c)} max={platOf(c) === "instagram" ? 2200 : 8000}
+                    suggestions={suggestionsFor(learned, r ? labelOf(r) : null)}
                     negative={r?.category === "Negative" && c.canHide && !c.hidden} busy={sending}
                     onSend={(t, hide) => sendReply(c, t, hide)} onCancel={() => setReplyingTo(null)} />
                 )}
@@ -1149,82 +1183,38 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   );
 }
 
-/** How Meta's comment count for one post adds up: open + hidden + brand replies + any Meta didn't return. */
-function Breakdown({ platform, reported, tally, notReturned }: {
-  platform: string; reported: number; tally: { loaded: number; open: number; hidden: number; brand: number }; notReturned: number;
-}) {
-  const n = (x: number) => x.toLocaleString("en-IN");
-  const where = platform === "instagram" ? "Instagram" : "Facebook";
-  const big = notReturned > 3 && notReturned > reported * 0.05;
-  return (
-    <div className="breakdown-line" title="Open = customer comments still visible. Hidden = hidden on Instagram/Facebook. Brand replies = the brand's own comments. Not returned = counted by Meta but not given to apps (usually deleted, or from restricted or private accounts).">
-      {n(reported)} on {where} = <b>{n(tally.open)} open</b> + {n(tally.hidden)} hidden + {n(tally.brand)} brand replies
-      {notReturned > 0 && <> + <span className={big ? "warn" : ""}>{n(notReturned)} not returned by Meta</span></>}
-      {tally.loaded > reported && <> <span className="faint">({n(tally.loaded - reported)} more than Meta&apos;s count, which can lag behind)</span></>}
-    </div>
-  );
-}
-
-/** What the check covered, plus anything it couldn't read, as short notes that each say what to do.
- *  Collapsed to one line by default so the page isn't a wall of warnings. */
-function LimitNotes({ sync, noun, status }: { sync: Sync; noun: string; status?: "active" | "all" }) {
-  const [open, setOpen] = useState(false);
-  const s = sync.stats;
-  if (!s || sync.phase !== "ready") return null;
-  const pl = (n: number, word: string) => `${n.toLocaleString("en-IN")} ${word}${n === 1 ? "" : "s"}`;
-  const notes: string[] = [];
-  if (s.capped) notes.push(`There were more ${noun}s than could be listed in one check, so the oldest ${noun === "ad" ? "(paused) ads" : "posts"} weren't read (${pl(s.checked, noun)} checked). → Pick a shorter time window${noun === "ad" && status === "all" ? " or switch to Active" : ""} to read the rest.`);
-  const w = sync.withheld;
-  if (w?.facebook) {
-    const pages = (sync.withheldPages || []).map((id) => `Page ID ${id}`).join(", ");
-    notes.push(`Meta counts comments on ${pl(w.facebook, "Facebook ad post")} but sent none. → Check your role on ${pages || "the Page"}: it needs permission to manage comments (Activity log has a ready check).`);
-  }
-  if (w?.instagram) notes.push(`Meta counts comments on ${pl(w.instagram, "Instagram post")} but sent none. → See the Activity log for a ready check.`);
-  if (s.fb && s.fb.notConnected) {
-    const pages = (s.fb.missingPages || []).map((p) => (p.name ? `${p.name} (Page ID ${p.id})` : `Page ID ${p.id}`));
-    notes.push(`${pl(s.fb.notConnected, "Facebook ad post")} are on ${pages.length === 1 ? "a Page" : `${pages.length} Pages`} this login can't open${pages.length ? `: ${pages.slice(0, 3).join(", ")}${pages.length > 3 ? ` and ${pages.length - 3} more (all in the Activity log)` : ""}` : ""}. → Ask for access, then reconnect and tick ${pages.length === 1 ? "it" : "them"}.`);
-  }
-  if (s.ig && s.ig.unreadable) notes.push(`${pl(s.ig.unreadable, "Instagram ad post")} couldn't be read due to ${s.ig.reason || "an error from Meta"}. → Details in the Activity log.`);
-  if (s.fb && s.fb.unreadable) notes.push(`${pl(s.fb.unreadable, "Facebook ad post")} couldn't be read due to ${s.fb.reason || "an error from Meta"}. → Details in the Activity log.`);
-  if (sync.failed) notes.push(`${pl(sync.failed, noun)} couldn't be loaded${sync.failReasons?.length ? ` due to ${sync.failReasons.join(", ")}` : ""}. → Press Refresh to try again.`);
-  if (sync.skipped) notes.push(`${pl(sync.skipped, noun)} weren't loaded in time. → Press Refresh to load ${sync.skipped === 1 ? "it" : "them"}.`);
-  if (s.ig && s.ig.partner) notes.push(`${pl(s.ig.partner, "Instagram ad post")} belong to creators (partnership ads). Meta doesn't share their comments with the brand; nothing to fix here.`);
-  const coverage = s.ig && s.fb
-    ? `Checked ${pl(s.checked, "ad")}: comments from ${s.ig.included} Instagram and ${s.fb.included - (w?.facebook || 0)} Facebook ad posts${w?.facebook ? ` (${w.facebook} more withheld by Meta)` : ""}.`
-    : "";
-  if (!notes.length && !coverage) return null;
-  const actionable = notes.filter((n) => n.includes("→")).length;
-  return (
-    <div className="limit-notes">
-      {coverage && <div className="coverage-note">{coverage}</div>}
-      {notes.length > 0 && (
-        <button className={`notes-toggle${actionable ? " warn" : ""}`} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-          <Info />
-          {actionable ? `Some comments couldn't be loaded · ${pl(actionable, "thing")} to check` : "Notes about this check"}
-          {open ? <ChevronUp /> : <ChevronDown />}
-        </button>
-      )}
-      {open && notes.map((n) => <div key={n} className={`limit-note${n.includes("→") ? "" : " calm"}`}><Info />{n}</div>)}
-    </div>
-  );
-}
-
-/** One line saying how fresh the data is: saved copy, checking, updating, or up to date. */
-function SyncLine({ sync, noun, single }: { sync: Sync; noun: string; single?: boolean }) {
-  const plural = (n: number) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-  const time = sync.checkedAt ? new Date(sync.checkedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase() : "";
-  let text = "";
-  if (sync.phase === "loading") text = single ? "Loading comments…" : sync.total ? `Loading comments from ${sync.loaded || 0} of ${plural(sync.total)}…` : `Checking every ${noun} for new comments…`;
-  else if (sync.phase === "checking") text = `Showing saved comments from ${ago(sync.cachedAt || Date.now())} · checking for new ones…`;
-  else if (sync.phase === "updating") text = `Updating ${sync.loaded || 0} of ${plural(sync.total || 0)} with new comments…`;
-  else if (sync.phase === "error") text = `Showing saved comments · couldn't check for new ones`;
-  else if (sync.fromCache) {
-    const at = sync.cachedAt ? new Date(sync.cachedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase() : "";
-    text = `Saved at ${at} (${ago(sync.cachedAt || Date.now())}) · press Refresh to check for new comments`;
-  }
-  else if (single) text = `Up to date · fetched ${time}`;
-  else text = `${sync.changed ? `Updated ${plural(Math.max(0, sync.changed))} with new comments` : "Up to date, nothing new"} · checked ${plural(sync.stats?.checked ?? sync.checked ?? 0)} at ${time}`
-    + (sync.skipped ? ` · ${sync.skipped} skipped to stay fast` : "") + (sync.failed ? ` · ${sync.failed} couldn't be read` : "");
+/** The only status shown: when the comments were last refreshed (or that a refresh is running / failed). */
+function Refreshed({ sync }: { sync: Sync }) {
   const live = sync.phase === "loading" || sync.phase === "checking" || sync.phase === "updating";
-  return <span className={`sync${live ? " live" : ""}${sync.phase === "error" ? " err" : ""}${sync.fromCache && !live ? " cached" : ""}`}>{text}</span>;
+  const at = sync.checkedAt || sync.cachedAt;
+  const when = at ? new Date(at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "";
+  const text = live ? "Refreshing…" : sync.phase === "error" ? `Couldn't refresh. Showing comments from ${when || "earlier"}.` : when ? `Refreshed ${when}` : "";
+  if (!text) return null;
+  return <span className={`sync${live ? " live" : ""}${sync.phase === "error" ? " err" : ""}`}>{text}</span>;
+}
+
+/** The ⋯ menu above the comments: Download CSV and the show/hide options. Closes on click outside or Esc. */
+function MoreMenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  return (
+    <div className="more" ref={ref}>
+      <button className="btn btn-sm btn-ghost btn-icon" aria-label="More options" aria-haspopup="menu" aria-expanded={open} title="More options" onClick={() => setOpen((o) => !o)}>
+        <MoreHorizontal />
+      </button>
+      {open && (
+        <div className="more-menu" role="menu" onClick={(e) => { if ((e.target as HTMLElement).closest("[data-close]")) setOpen(false); }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
 }
