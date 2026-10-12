@@ -409,7 +409,6 @@ function App({ userName }: { userName: string }) {
             <div>
               {backBtn}
               <h1 className="page-title">Post comments</h1>
-              <p className="page-sub">{postsMode === "inbox" ? "Every new comment across your Instagram and Facebook posts, in one place." : "Every comment on your organic posts, sorted into Enquiry, Positive and Negative."}</p>
             </div>
             <div className="controls">
               <SelectPill icon={<Store />} label="Page" title={page?.name} value={pageId} disabled={!pages?.length}
@@ -507,7 +506,6 @@ function App({ userName }: { userName: string }) {
             <div>
               {backBtn}
               <h1 className="page-title">Ad comments</h1>
-              <p className="page-sub">{adsMode === "inbox" ? "Every new comment across all your ads, in one place." : "Comments on the posts behind your ads, where most complaints and spam land."}</p>
             </div>
             <div className="controls">
               <SelectPill icon={<Wallet />} label="Ad account" title={adAccounts?.find((a) => a.id === adAccountId)?.name} value={adAccountId} disabled={!adAccounts?.length} onChange={(v) => { setAdAccountId(v); setTarget(null); setAdId(""); }}>
@@ -681,7 +679,6 @@ function AccessCallout({ pages, page, missingPermissions }: { pages: PageAcc[] |
           <div className="callout-title">Some access wasn&apos;t granted</div>
           <div className="callout-body">
             Comment Pulse can&apos;t {missingPermissions.map((p) => PERMISSION_PURPOSE[p] || p).join(", ")}.
-            <div className="action">→ Reconnect and allow everything in the Facebook pop-up.</div>
           </div>
         </div>
         <a className="btn btn-sm" href={RECONNECT}>Reconnect</a>
@@ -696,7 +693,6 @@ function AccessCallout({ pages, page, missingPermissions }: { pages: PageAcc[] |
           <div className="callout-title">No Instagram account for {page.name}</div>
           <div className="callout-body">
             Either this Page has no Instagram professional account linked, or it wasn&apos;t ticked when you logged in. Facebook posts still work.
-            <div className="action">→ If the merchant has Instagram, reconnect and tick it.</div>
           </div>
         </div>
         <a className="btn btn-sm" href={RECONNECT}>Reconnect</a>
