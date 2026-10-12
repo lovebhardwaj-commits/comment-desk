@@ -163,7 +163,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const [sent, setSent] = useState<Record<string, string>>({});
   // Hide-all dialog
   const [hideAllOpen, setHideAllOpen] = useState(false);
-  const [skipComplaints, setSkipComplaints] = useState(false);
   const [hideAllRun, setHideAllRun] = useState<{ done: number; total: number } | null>(null);
   const [hideAllResult, setHideAllResult] = useState<{ hidden: string[]; failed: HideResult[] } | null>(null);
   // Translations of comments in other languages (saved in the browser), and whether translation is available.
@@ -528,7 +527,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   }
 
   async function runHideAll() {
-    const ids = negativeTargets.filter((c) => !(skipComplaints && results[c.id]?.negative_type === "complaint")).map((c) => c.id);
+    const ids = negativeTargets.map((c) => c.id);
     if (!ids.length) return;
     setHideAllResult(null);
     setHideAllRun({ done: 0, total: ids.length });
@@ -707,28 +706,21 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     return s;
   }, [comments, sent]);
 
-  // Only what needs action in the category being looked at: Negative → complaints, then spam; Enquiry → unanswered
-  // enquiries; All → the most urgent of those; Positive → nothing to act on, so no box.
+  // On Open/All only, one line about what needs action: negative comments first, then enquiries without a brand reply.
+  // By count only: the built-in model's sub-types (complaint / criticism / spam) aren't reliable enough to show.
   const insight = useMemo(() => {
-    if (progress || !customer.length || filter === "Positive") return null;
-    const visible = customer;
-    const complaints = filter === "Enquiry" ? [] : visible.filter((c) => results[c.id]?.negative_type === "complaint");
-    const openEnq = filter === "Negative" ? [] : visible.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id));
-    const spam = filter === "Enquiry" ? [] : visible.filter((c) => results[c.id]?.negative_type === "spam" && c.canHide);
-    if (complaints.length) return {
+    if (progress || !customer.length || filter !== "All") return null;
+    const negatives = customer.filter((c) => results[c.id]?.category === "Negative").length;
+    const openEnq = customer.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id)).length;
+    if (negatives) return {
       tone: "danger", tag: "Needs attention",
-      title: `${fmtN(complaints.length)} ${complaints.length === 1 ? "customer has" : "customers have"} an order or product problem`,
-      button: filter === "Negative" ? null : { label: "Show negatives", run: () => setFilter("Negative") },
+      title: `${fmtN(negatives)} negative ${negatives === 1 ? "comment" : "comments"}`,
+      button: { label: "Show negatives", run: () => setFilter("Negative") },
     };
-    if (spam.length) return {
+    if (openEnq) return {
       tone: "info", tag: "Info",
-      title: `${fmtN(spam.length)} spam ${spam.length === 1 ? "comment" : "comments"} can be hidden`,
-      button: { label: "Select spam", run: () => { setFilter("Negative"); setSelected(new Set(spam.map((c) => c.id))); } },
-    };
-    if (openEnq.length) return {
-      tone: "info", tag: "Info",
-      title: `${fmtN(openEnq.length)} ${openEnq.length === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
-      button: filter === "Enquiry" ? null : { label: "Show enquiries", run: () => setFilter("Enquiry") },
+      title: `${fmtN(openEnq)} ${openEnq === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
+      button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
     };
     return null;
   }, [customer, results, replied, progress, filter]);
@@ -802,9 +794,13 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
   const aiBucket = filter === "Enquiry" || filter === "Positive" || filter === "Negative" ? filter : null;
   const aiComments: InsightComment[] = aiBucket ? exportable.filter((c) => !c.hidden && c.text.trim()).map((c) => ({
     id: c.id, text: c.text, author: c.author, platform: platOf(c),
-    post: c.src ? c.src.caption || c.src.label : target?.caption || "", type: results[c.id]?.negative_type || undefined,
+    post: c.src ? c.src.caption || c.src.label : target?.caption || "",
   })) : [];
   const aiContext = inbox ? `${inbox.scope}, ${inbox.label}` : `${target?.kind === "ad" ? "Ad" : "Post"}: ${(target?.caption || target?.title || "").slice(0, 120)}`;
+  // The category's one-line summary, shown inside the analysis card (one card per category instead of two).
+  const showAnalysis = !!aiBucket && aiComments.length >= 3;
+  const unanswered = aiBucket === "Enquiry" ? customer.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id)).length : 0;
+  const lead = unanswered ? <span>{fmtN(unanswered)} {unanswered === 1 ? "has" : "have"} no reply from the brand</span> : undefined;
   const aiKey = `insights:${cacheKey}:${inbox ? inbox.key : target?.key}:${filter}:${plat}:${query.trim().toLowerCase()}`;
   /** Scrolls to a comment in the list and highlights it briefly. */
   function jumpTo(id: string) {
@@ -823,12 +819,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
   const hideable = visible.filter((c) => c.canHide && !c.hidden);
   const negativeTargets = customer.filter((c) => c.canHide && !c.hidden && results[c.id]?.category === "Negative");
-  const negBreakdown = {
-    complaint: negativeTargets.filter((c) => results[c.id]?.negative_type === "complaint").length,
-    criticism: negativeTargets.filter((c) => results[c.id]?.negative_type === "criticism" || results[c.id]?.negative_type === "abuse").length,
-    spam: negativeTargets.filter((c) => results[c.id]?.negative_type === "spam").length,
-  };
-  const hideAllCount = negativeTargets.length - (skipComplaints ? negBreakdown.complaint : 0);
+  const hideAllCount = negativeTargets.length;
   const selectedHideable = [...selected].filter((id) => hideable.some((c) => c.id === id));
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSelected = hideable.length > 0 && hideable.every((c) => selected.has(c.id));
@@ -903,7 +894,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
       {progress && <div className="progress" aria-label="Categorising"><i style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 100}%` }} /></div>}
 
-      {insight && (
+      {insight && !showAnalysis && (
         <div className={`callout${insight.tone === "danger" ? " danger" : ""}`}>
           <div className="callout-main">
             <div className="callout-tag">{insight.tag}</div>
@@ -914,7 +905,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
       )}
 
       {/* Only when there's something to analyse: it needs at least 3 comments with text in this category. */}
-      {aiBucket && aiComments.length >= 3 && <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />}
+      {showAnalysis && <InsightsPanel bucket={aiBucket!} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} lead={lead} />}
 
       <div className="toolbar">
         <label className="search">
@@ -1034,19 +1025,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
           </>
         ) : (
           <>
-            <div className="breakdown">
-              {negBreakdown.complaint > 0 && <span>{negBreakdown.complaint} complaint{negBreakdown.complaint === 1 ? "" : "s"}</span>}
-              {negBreakdown.criticism > 0 && <span>{negBreakdown.criticism} criticism</span>}
-              {negBreakdown.spam > 0 && <span>{negBreakdown.spam} spam</span>}
-            </div>
-            {negBreakdown.complaint > 0 && (
-              <label className="checkrow">
-                <input type="checkbox" className="check" checked={skipComplaints} onChange={(e) => setSkipComplaints(e.target.checked)} disabled={!!hideAllRun} />
-                <span>Skip complaints
-                  <small>Customers with an order problem can still see their own comment. Reply to them first, then hide.</small>
-                </span>
-              </label>
-            )}
             <div className="fine-note">Comments are hidden in batches of 50 and each one is checked with Meta afterwards. Hidden comments stay visible to the person who wrote them and their friends. You can unhide them any time.</div>
             {hideAllRun && <div className="progress"><i style={{ width: `${(100 * hideAllRun.done) / hideAllRun.total}%` }} /></div>}
           </>
@@ -1100,7 +1078,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
                 {!c.isBrand && (
                   <div className="c-foot">
                     {r && r.category !== "Unclassified" ? (
-                      <span className={`cat-chip cat-${r.category}`}>{CHOICES.find(([v]) => v === labelOf(r))?.[1] || r.category}</span>
+                      <span className={`cat-chip cat-${r.category}`}>{r.category}</span>
                     ) : c.text.trim() ? <span className="skel cat-pending" aria-label="Categorising" /> : null}
                     {r?.score != null && <span className="score" title="How sure the app is about this category">{Math.round(r.score * 100)}%</span>}
                     {translateOn && !translations[c.id] && foreignLanguage(c.text) && (
