@@ -43,6 +43,8 @@ export type LocalResult = {
   needs_review: boolean;
   reason: string;
   label: Label;
+  /** How sure the model is about this category, 0–1 (1 for a team correction). Shown as a % on each comment. */
+  score: number;
 };
 
 const REVIEW_BELOW = 0.5;
@@ -50,7 +52,7 @@ const REVIEW_BELOW = 0.5;
 export function toResult(label: string, p: number, reason: string): LocalResult {
   const category = label === "Enquiry" || label === "Positive" ? label : "Negative";
   const negative_type = label === "Complaint" ? "complaint" : label === "Spam" ? "spam" : label === "Negative" ? "criticism" : null;
-  return { category, negative_type, needs_review: p < REVIEW_BELOW, reason, label: label as Label };
+  return { category, negative_type, needs_review: p < REVIEW_BELOW, reason, label: label as Label, score: Math.round(p * 100) / 100 };
 }
 
 export async function classifyLocal(texts: string[]): Promise<LocalResult[]> {
