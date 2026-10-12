@@ -899,8 +899,7 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             </>
           )}
           <div className="hero-meta">
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><PlatformIcon />{target!.platform === "instagram" ? "Instagram" : "Facebook"}{target!.kind === "ad" ? " ad" : " post"}</span>
-            {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer">Open on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
+            {target!.permalink && <a href={target!.permalink} target="_blank" rel="noreferrer"><PlatformIcon />See on {target!.platform === "instagram" ? "Instagram" : "Facebook"}<ExternalLink /></a>}
             <Refreshed sync={sync} />
           </div>
           {headerExtra && <div className="hero-switch">{headerExtra}</div>}
@@ -957,7 +956,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         </div>
       )}
 
-      {aiBucket && <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />}
+      {/* Only when there's something to analyse: it needs at least 3 comments with text in this category. */}
+      {aiBucket && aiComments.length >= 3 && <InsightsPanel bucket={aiBucket} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />}
 
       <div className="toolbar">
         <label className="search">
@@ -1031,7 +1031,9 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
         ? <div className="card"><Empty icon={<Inbox />} title={`No comments ${inbox.phrase}`}>You&apos;re all caught up. Try a longer window if you expected more.</Empty></div>
         : <div className="card"><Empty icon={<MessageCircle />} title="No comments yet">When people comment on this {target?.kind === "ad" ? "ad" : "post"}, they&apos;ll appear here.</Empty></div>)}
       {comments && comments.length > 0 && visible.length === 0 && (
-        <div className="card"><Empty small icon={<Search />} title="Nothing matches">Try another filter or search.</Empty></div>
+        <div className="card">{filter !== "All" && !query.trim()
+          ? <Empty small icon={<MessageCircle />} title={`No ${filter === "Enquiry" ? "enquiries" : `${filter.toLowerCase()} comments`} here`}>{inbox ? `None ${inbox.phrase}.` : `None on this ${target?.kind === "ad" ? "ad" : "post"}.`}</Empty>
+          : <Empty small icon={<Search />} title="Nothing matches">Try another search{filter !== "All" ? " or category" : ""}.</Empty>}</div>
       )}
 
       <Modal open={hideAllOpen} onClose={closeHideAll} busy={!!hideAllRun}
