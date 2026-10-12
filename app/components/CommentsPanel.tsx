@@ -982,6 +982,10 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
             <EyeOff />Hide all negative ({fmtN(negativeTargets.length)})
           </button>
         )}
+        <label className="toggle" title="Show the brand's own replies under the comments they answer">
+          <input type="checkbox" checked={showBrand} onChange={(e) => setShowBrand(e.target.checked)} />
+          <span className="track" />Brand replies
+        </label>
         <MoreMenu>
           <button role="menuitem" data-close onClick={exportCsv} disabled={!exportable.length || !!progress || busyNow}
             title={progress ? "Wait until every comment is categorised" : undefined}>
@@ -992,9 +996,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
               {showHidden ? <Check /> : <span className="mm-box" />}Show hidden comments ({fmtN(hiddenCounts.All)})
             </button>
           )}
-          <button role="menuitemcheckbox" aria-checked={showBrand} onClick={() => setShowBrand((v) => !v)}>
-            {showBrand ? <Check /> : <span className="mm-box" />}Show brand replies
-          </button>
         </MoreMenu>
       </div>
 
