@@ -2,9 +2,19 @@
 // comment it answered (from the built-in model), near-identical replies are grouped, and the most used come first.
 type C = { id: string; text: string; author: string; parentId: string | null; isBrand: boolean };
 
-const display = (t: string) => t.replace(/^\s*(@[\w.]+[\s,:]*)+/, "").replace(/\s+/g, " ").trim();
-// Same reply apart from @names, punctuation, emojis and spacing.
-const key = (t: string) => display(t).replace(/@[\w.]+/g, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+// Greetings that are usually followed by the person's name ("Hi Praveen!", "Hey @sabu.p.p!").
+const GREETING = /^(\s*(?:hi+|hello+|hey+|hlo|dear|namaste|hii+)\b)\s+(?!(?:there|team|all|everyone|customer|customers|sir|ma'?am|madam|mam|friend|friends|dear|beautiful|lovely)\b)[\p{L}][\p{L}\p{N}._'-]*(?:\s+[\p{Lu}][\p{L}'-]*)?(?=\s*[!,.:🙏👋😊❤️💜]|\s*$)/iu;
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The reply as it can be reused for someone else: no @mentions, no name after the greeting, and not the name of
+ *  the person it originally answered. "Hi Praveen! 👋 Nilini is…" → "Hi! 👋 Nilini is…". */
+export function reusable(t: string, answered = ""): string {
+  let s = t.replace(/@[\w.]+/g, " ");
+  if (answered.trim().length >= 3) s = s.replace(new RegExp(`\\b${escape(answered.trim())}\\b`, "gi"), " ");
+  s = s.replace(GREETING, "$1");
+  return s.replace(/\s+([!,.:?])/g, "$1").replace(/^[\s,.:!]+/, "").replace(/\s+/g, " ").trim();
+}
+// Same reply apart from names, punctuation, emojis and spacing.
+const key = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 export type Learned = { byLabel: Map<string, string[]>; all: string[] };
 
@@ -21,8 +31,8 @@ export function learnReplies(comments: C[], labelFor: (commentId: string) => str
     if (!c.isBrand || !c.parentId) continue;
     const parent = byId.get(c.parentId);
     if (!parent || parent.isBrand) continue;
-    const shown = display(c.text);
-    const k = key(c.text);
+    const shown = reusable(c.text, parent.author);
+    const k = key(shown);
     if (k.length < 2 || shown.length > 400) continue;
     const label = labelFor(parent.id) || "Other";
     if (!groups.has(label)) groups.set(label, new Map());
