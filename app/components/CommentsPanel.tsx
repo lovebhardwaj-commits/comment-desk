@@ -706,25 +706,6 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     return s;
   }, [comments, sent]);
 
-  // On Open/All only, one line about what needs action: negative comments first, then enquiries without a brand reply.
-  // By count only: the built-in model's sub-types (complaint / criticism / spam) aren't reliable enough to show.
-  const insight = useMemo(() => {
-    if (progress || !customer.length || filter !== "All") return null;
-    const negatives = customer.filter((c) => results[c.id]?.category === "Negative").length;
-    const openEnq = customer.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id)).length;
-    if (negatives) return {
-      tone: "danger", tag: "Needs attention",
-      title: `${fmtN(negatives)} negative ${negatives === 1 ? "comment" : "comments"}`,
-      button: { label: "Show negatives", run: () => setFilter("Negative") },
-    };
-    if (openEnq) return {
-      tone: "info", tag: "Info",
-      title: `${fmtN(openEnq)} ${openEnq === 1 ? "enquiry has" : "enquiries have"} no reply from the brand`,
-      button: { label: "Show enquiries", run: () => setFilter("Enquiry") },
-    };
-    return null;
-  }, [customer, results, replied, progress, filter]);
-
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = (comments || []).filter((c) => {
@@ -797,10 +778,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
     post: c.src ? c.src.caption || c.src.label : target?.caption || "",
   })) : [];
   const aiContext = inbox ? `${inbox.scope}, ${inbox.label}` : `${target?.kind === "ad" ? "Ad" : "Post"}: ${(target?.caption || target?.title || "").slice(0, 120)}`;
-  // The category's one-line summary, shown inside the analysis card (one card per category instead of two).
+  // In a category view, the analysis card is the only card above the comments (it needs 3+ comments with text).
   const showAnalysis = !!aiBucket && aiComments.length >= 3;
-  const unanswered = aiBucket === "Enquiry" ? customer.filter((c) => results[c.id]?.category === "Enquiry" && !c.parentId && !replied.has(c.id)).length : 0;
-  const lead = unanswered ? <span>{fmtN(unanswered)} {unanswered === 1 ? "has" : "have"} no reply from the brand</span> : undefined;
   const aiKey = `insights:${cacheKey}:${inbox ? inbox.key : target?.key}:${filter}:${plat}:${query.trim().toLowerCase()}`;
   /** Scrolls to a comment in the list and highlights it briefly. */
   function jumpTo(id: string) {
@@ -894,18 +873,8 @@ export default function CommentsPanel({ target, inbox, headerExtra, refresh = 0 
 
       {progress && <div className="progress" aria-label="Categorising"><i style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 100}%` }} /></div>}
 
-      {insight && !showAnalysis && (
-        <div className={`callout${insight.tone === "danger" ? " danger" : ""}`}>
-          <div className="callout-main">
-            <div className="callout-tag">{insight.tag}</div>
-            <div className="callout-title">{insight.title}</div>
-          </div>
-          {insight.button && <button className="btn btn-sm" onClick={insight.button.run}>{insight.button.label}</button>}
-        </div>
-      )}
-
       {/* Only when there's something to analyse: it needs at least 3 comments with text in this category. */}
-      {showAnalysis && <InsightsPanel bucket={aiBucket!} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} lead={lead} />}
+      {showAnalysis && <InsightsPanel bucket={aiBucket!} comments={aiComments} context={aiContext} saveKey={aiKey} onJump={jumpTo} />}
 
       <div className="toolbar">
         <label className="search">
