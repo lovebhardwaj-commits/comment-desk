@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Lightbulb, Instagram, Facebook } from "lucide-react";
 import { api } from "./api";
 import { cacheGet, cacheSet, ago } from "./cache";
@@ -42,8 +42,10 @@ const NOUN: Record<Bucket, string> = { Enquiry: "enquiries", Positive: "positive
 const ASK: Record<Bucket, string> = { Enquiry: "What are people asking?", Positive: "Why are people happy?", Negative: "What's going wrong?" };
 
 /** "Why are people saying this?" for one category: themes, counts, real example comments and suggestions. */
-export default function InsightsPanel({ bucket, comments, context, saveKey, onJump }: {
+export default function InsightsPanel({ bucket, comments, context, saveKey, onJump, lead }: {
   bucket: Bucket; comments: InsightComment[]; context: string; saveKey: string; onJump: (id: string) => void;
+  /** One line about this category (e.g. "24 look like complaints · 8 criticism · 4 spam"), shown under the title. */
+  lead?: ReactNode;
 }) {
   const [setup, setSetup] = useState<{ configured: boolean; model?: string; missing?: string[] } | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -163,7 +165,7 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
     return (
       <div className="ai-card ai-muted">
         <div className="ai-head"><Sparkles /><strong>{ASK[bucket]}</strong></div>
-        <div className="ai-note">AI analysis isn&apos;t available yet.</div>
+        {lead ? <div className="ai-lead">{lead}</div> : <div className="ai-note">AI analysis isn&apos;t available yet.</div>}
       </div>
     );
   }
@@ -183,7 +185,8 @@ export default function InsightsPanel({ bucket, comments, context, saveKey, onJu
         </button>
       </div>
 
-      {!r && !running && !error && (
+      {lead && <div className="ai-lead">{lead}</div>}
+      {!r && !running && !error && !lead && (
         <div className="ai-note">
           {enough ? <>Groups the {NOUN[bucket]} shown here into themes, with how many comments are in each and real examples.</>
             : <>Needs at least 3 {NOUN[bucket]} with text in this view. Try a longer time window.</>}

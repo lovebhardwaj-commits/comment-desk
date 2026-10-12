@@ -68,3 +68,6 @@
 .comment.in-thread { margin-top: -6px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 .reply-mark { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .reply-mark svg { width: 13px; height: 13px; }
+
+/* ── The category's summary line inside the analysis card ── */
+.ai-lead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--ink-2); }
