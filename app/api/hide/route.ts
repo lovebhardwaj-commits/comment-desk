@@ -5,6 +5,14 @@ import { requireToken } from "@/lib/session";
 
 export const maxDuration = 60;
 
+/** Meta's permission errors (#10, #200) in words a person can act on; other errors are passed through. */
+function plainError(error: string | undefined, hide: boolean, ig: boolean) {
+  if (error && /#10\b|#200\b|permission/i.test(error)) {
+    return `You don't have permission to ${hide ? "hide" : "unhide"} this comment. Check your access to this ${ig ? "Instagram account" : "Facebook Page"}.`;
+  }
+  return error;
+}
+
 // Hides or unhides comments in batches of 50, then reads each one back from Meta to confirm it changed.
 // Body: { platform, pageId, hide, commentIds: string[] }  (commentId is also accepted for a single comment)
 export async function POST(req: NextRequest) {
@@ -35,7 +43,7 @@ export async function POST(req: NextRequest) {
         ok: w.ok && state !== !hide,
         verified,
         hidden: state ?? (w.ok ? hide : !hide),
-        error: !w.ok ? w.error : state === !hide ? "Meta accepted the request but the comment didn't change" : undefined,
+        error: !w.ok ? plainError(w.error, hide, ig) : state === !hide ? "Meta accepted the request but the comment didn't change" : undefined,
       };
     });
     return { results };

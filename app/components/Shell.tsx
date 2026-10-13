@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import { initials } from "./ui";
 import { cacheClear } from "./cache";
-import LogPanel from "./LogPanel";
 
 export type View = "posts" | "ads";
 
@@ -86,27 +85,14 @@ function ThemeToggle() {
   );
 }
 
-/** The Activity log is for the internal team only: open the app once with ?debug=1 to show it (remembered in this
- *  browser), ?debug=0 to hide it again. Merchants never see it. */
-function useDebug() {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    try {
-      const q = new URLSearchParams(window.location.search).get("debug");
-      if (q === "1") localStorage.setItem("cp:debug", "1");
-      if (q === "0") localStorage.removeItem("cp:debug");
-      setOn(localStorage.getItem("cp:debug") === "1");
-    } catch {}
-  }, []);
-  return on;
-}
+// The Activity log (LogPanel) is hidden for now; events are still recorded by log.ts. To show it again, render
+// <LogPanel collapsed={collapsed} /> in the sidebar footer.
 
 /** The app frame in the Fastrr Ads style: the full Fastrr Ads sidebar with a "Social" section (Post comments, Ad comments).
  *  Without userName (logged out) the same frame is shown around the login prompt, with no account footer. */
 export default function Shell({ view, onView, onHome, userName, children }: { view: View; onView: (v: View) => void; onHome?: () => void; userName?: string; children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const debug = useDebug();
 
   useEffect(() => {
     try { setCollapsed(localStorage.getItem("cp:sidebar") === "1"); } catch {}
@@ -160,7 +146,6 @@ export default function Shell({ view, onView, onHome, userName, children }: { vi
 
         {userName !== undefined && (
           <div className="sidebar-bottom">
-            {debug && <nav className="nav"><LogPanel collapsed={collapsed} /></nav>}
             <div className="user" title={userName}>
               <span className="avatar">{initials(userName)}</span>
               <span className="user-name">{userName}</span>
