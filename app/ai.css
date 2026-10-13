@@ -107,3 +107,16 @@
 /* Menu items that belong to Fastrr Ads: shown as in Fastrr Ads, not clickable here */
 .shell.fastrr .nav-static { cursor: default; }
 .shell.fastrr .nav-static:hover { background: transparent; color: inherit; }
+/* ── Collapsed sidebar, as in Fastrr Ads: a narrow icon rail; only the expand button at the top (no logo),
+   a thin divider where each heading was, smaller icons, and only the initial at the bottom ── */
+.shell.fastrr.collapsed { grid-template-columns: 56px 1fr; }
+.shell.fastrr.collapsed .sidebar { padding: 14px 8px; }
+.shell.fastrr.collapsed .brand-link { display: none; }
+.shell.fastrr.collapsed .sidebar-top { padding: 0 0 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.shell.fastrr.collapsed .nav-scroll { margin: 0 -4px; padding: 0 4px; }
+.shell.fastrr.collapsed .nav-section { display: block; height: 1px; padding: 0; margin: 8px 6px; font-size: 0; background: var(--line); }
+.shell.fastrr.collapsed .nav-item { height: 34px; }
+.shell.fastrr.collapsed .nav-item svg { width: 16px; height: 16px; }
+.shell.fastrr.collapsed .g-mark { width: 16px; height: 16px; font-size: 13px; }
+.shell.fastrr.collapsed .user .btn { display: none; }
+.shell.fastrr.collapsed .user .avatar { margin: 0 auto; }
