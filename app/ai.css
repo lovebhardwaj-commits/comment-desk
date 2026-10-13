@@ -71,3 +71,39 @@
 
 /* ── The category's summary line inside the analysis card ── */
 .ai-lead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--ink-2); }
+
+/* ── Fastrr Ads frame: wordmark, Social section, light sidebar with a coral active item ── */
+.fastrr-mark { display: inline-flex; flex-direction: column; line-height: 1; }
+.fastrr-word { display: inline-flex; align-items: center; gap: 3px; font-size: 21px; font-weight: 800; font-style: italic; letter-spacing: -.03em; color: var(--ink); }
+.fastrr-lines { display: inline-block; width: 9px; height: 7px; border-top: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: skewX(-20deg); }
+.fastrr-sub { align-self: flex-start; margin: 2px 0 0 14px; font-size: 10px; font-weight: 600; color: var(--ink-2); }
+.collapsed .fastrr-word { font-size: 0; }
+.collapsed .fastrr-word .fastrr-lines { width: 14px; height: 10px; }
+.collapsed .fastrr-sub { display: none; }
+.shell.fastrr .nav-section { font-size: 11.5px; letter-spacing: .06em; font-weight: 600; padding: 18px 12px 8px; }
+.shell.fastrr .nav-item { height: 38px; font-weight: 500; }
+:root[data-theme="light"] .shell.fastrr .sidebar { background: #fbf8f5; }
+:root[data-theme="light"] .shell.fastrr .nav-item[aria-current="page"] { background: #f6e4de; border-color: #efcfc6; color: var(--ink); }
+:root[data-theme="light"] .shell.fastrr .nav-item[aria-current="page"] svg { color: #de8274; }
+
+/* ── Shared login prompt (logged out), as in Fastrr Ads ── */
+.login-prompt { min-height: calc(100vh - 160px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 22px; padding: 24px; }
+.login-prompt h1 { margin: 0; max-width: 900px; font-size: clamp(30px, 4.2vw, 56px); font-style: italic; font-weight: 400; letter-spacing: -.035em; line-height: 1.1; color: var(--ink); }
+.login-prompt-icon { display: grid; place-items: center; width: 84px; height: 84px; margin-top: 28px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); }
+.login-prompt-icon svg { width: 34px; height: 34px; color: #de8274; }
+.login-prompt p { margin: 0; max-width: 470px; color: var(--muted); font-size: 15.5px; line-height: 1.55; }
+.login-prompt .error { color: var(--negative); }
+.login-prompt-btn { min-width: 300px; justify-content: center; margin-top: 8px; }
+/* ── Full Fastrr Ads menu: scrolls on its own, headings are separators ── */
+.shell.fastrr .sidebar { overflow: hidden; }
+.shell.fastrr .nav-scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -6px; padding: 0 6px; scrollbar-width: thin; }
+.shell.fastrr .nav-group:first-child .nav-section { padding-top: 6px; }
+.shell.fastrr .nav-badge { margin-left: auto; font-size: 10.5px; font-weight: 600; color: #de8274; border: 1px solid #efcfc6; border-radius: 5px; padding: 1px 7px; }
+.shell.fastrr .user .user-name { display: none; }
+.shell.fastrr .user { gap: 4px; }
+.shell.fastrr .user .avatar { margin-right: auto; border-radius: 7px; }
+.g-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; font-weight: 800; font-size: 15px; color: var(--muted); flex-shrink: 0; }
+.collapsed .nav-badge { display: none; }
+/* Menu items that belong to Fastrr Ads: shown as in Fastrr Ads, not clickable here */
+.shell.fastrr .nav-static { cursor: default; }
+.shell.fastrr .nav-static:hover { background: transparent; color: inherit; }

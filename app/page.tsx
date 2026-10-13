@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/session";
 import Dashboard from "./components/Dashboard";
 import { BrandMark } from "./components/Shell";
+import LoginGate from "./components/LoginGate";
 
 export const dynamic = "force-dynamic";
 
@@ -48,12 +49,5 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
   const loggedIn = !!s.userToken && (!s.expiresAt || Date.now() < s.expiresAt);
   if (loggedIn) return <Dashboard userName={s.userName || ""} userId={s.userId || ""} />;
 
-  return (
-    <Card>
-      <h1>Know what customers are saying</h1>
-      <p>Every comment on your merchants&apos; Facebook and Instagram posts and ads, sorted into Enquiry, Positive and Negative, so you can reply faster and hide what shouldn&apos;t be public.</p>
-      {error && <p className="error" role="alert">{error}</p>}
-      <a className="btn btn-primary btn-lg" style={{ width: "100%" }} href="/api/auth/login">Continue with Facebook</a>
-    </Card>
-  );
+  return <LoginGate error={error} />;
 }
