@@ -31,7 +31,8 @@ export default function Dashboard({ userName, userId }: { userName: string; user
 }
 
 function App({ userName }: { userName: string }) {
-  const [view, setView] = useState<View>("posts");
+  // Ad comments is the landing screen (first under Social in the sidebar).
+  const [view, setView] = useState<View>("ads");
   const [target, setTarget] = useState<Target | null>(null);
 
   // Accounts
@@ -146,7 +147,7 @@ function App({ userName }: { userName: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, postsMode, adsMode, target?.key, adId, platform, pageId, adAccountId]);
 
-  const atStart = view === "posts" && postsMode === "inbox";
+  const atStart = view === "ads" && adsMode === "inbox";
   /** In-app Back: the previous screen in this tab, or the screen "above" this one if there's no history yet. */
   function goBack() {
     if (depth.current > 0) { window.history.back(); return; }
@@ -154,9 +155,9 @@ function App({ userName }: { userName: string }) {
     if (view === "ads" && adsMode === "list") { setAdsMode("inbox"); setTarget(null); setAdId(""); return; }
     goHome();
   }
-  /** The logo: back to the start screen (Post comments · All comments). */
+  /** The logo: back to the start screen (Ad comments · All comments). */
   function goHome() {
-    setView("posts"); setPostsMode("inbox"); setTarget(null); setAdId("");
+    setView("ads"); setAdsMode("inbox"); setTarget(null); setAdId("");
   }
   const backBtn = !atStart ? (
     <button className="btn btn-sm btn-ghost back-btn" onClick={goBack} title="Back to the previous screen"><ArrowLeft />Back</button>
