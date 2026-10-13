@@ -31,8 +31,8 @@ const MENU: { heading?: string; items: Item[] }[] = [
     { label: "Frequency Report", icon: LayoutGrid },
   ] },
   { heading: "Social", items: [
-    { label: "Ad comments", icon: Megaphone, view: "ads" },
     { label: "Post comments", icon: MessagesSquare, view: "posts" },
+    { label: "Ad comments", icon: Megaphone, view: "ads" },
   ] },
   { heading: "Create", items: [
     { label: "Inspiration Hub", icon: Sparkles, badge: "Beta" },
@@ -101,7 +101,7 @@ function useDebug() {
   return on;
 }
 
-/** The app frame in the Fastrr Ads style: the full Fastrr Ads sidebar with a "Social" section (Ad comments, Post comments).
+/** The app frame in the Fastrr Ads style: the full Fastrr Ads sidebar with a "Social" section (Post comments, Ad comments).
  *  Without userName (logged out) the same frame is shown around the login prompt, with no account footer. */
 export default function Shell({ view, onView, onHome, userName, children }: { view: View; onView: (v: View) => void; onHome?: () => void; userName?: string; children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);

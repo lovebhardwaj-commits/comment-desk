@@ -120,3 +120,8 @@
 .shell.fastrr.collapsed .g-mark { width: 16px; height: 16px; font-size: 13px; }
 .shell.fastrr.collapsed .user .btn { display: none; }
 .shell.fastrr.collapsed .user .avatar { margin: 0 auto; }
+/* ── Hidden comments: clearly set apart from public ones (muted card, dashed border, faded text, clear tag) ── */
+.comments .comment.is-hidden { background: var(--bg-2); border-style: dashed; box-shadow: none; }
+.comments .comment.is-hidden .c-text, .comments .comment.is-hidden .c-author, .comments .comment.is-hidden .c-src { opacity: .55; }
+.comments .comment.is-hidden .tag-hidden, .comments .comment.is-hidden .tag-verified { background: var(--ink-2); color: var(--surface); border-color: transparent; }
+.comments .comment.is-hidden .tag-hidden svg, .comments .comment.is-hidden .tag-verified svg { color: var(--surface); }
